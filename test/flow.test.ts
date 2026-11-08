@@ -1,0 +1,158 @@
+import { test, before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createServer } from 'node:net'
+import { loadConfig } from '../server/config.ts'
+import { createApp, type App } from '../server/app.ts'
+import { startFakeModel, type FakeModel } from './fake-model.ts'
+
+let app: App
+let model: FakeModel
+let base = ''
+let dataDir = ''
+
+async function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const s = createServer()
+    s.listen(0, '127.0.0.1', () => {
+      const port = (s.address() as { port: number }).port
+      s.close(() => resolve(port))
+    })
+  })
+}
+
+class Client {
+  cookie = ''
+  async call<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+    const res = await fetch(base + path, {
+      method,
+      headers: { 'content-type': 'application/json', ...(this.cookie ? { cookie: this.cookie } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    const setCookie = res.headers.get('set-cookie')
+    if (setCookie) this.cookie = setCookie.split(';')[0]!
+    const json = (await res.json()) as T & { error?: string }
+    if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${json.error}`)
+    return json
+  }
+}
+
+before(async () => {
+  model = await startFakeModel()
+  dataDir = mkdtempSync(join(tmpdir(), 'agent-space-test-'))
+  const port = await freePort()
+  process.env.DEEPSEEK_API_KEY = 'sk-test'
+  const config = loadConfig({ port, host: '127.0.0.1', internalUrl: `http://127.0.0.1:${port}`, dataDir, modelBaseUrl: model.url, agentTimeoutMs: 120_000, maxConcurrentAgents: 4, webDist: join(dataDir, 'no-web') })
+  app = await createApp(config, { logger: false })
+  await app.server.listen({ port, host: '127.0.0.1' })
+  app.jobs.start()
+  base = `http://127.0.0.1:${port}`
+})
+
+after(async () => {
+  await app?.close()
+  await model?.close()
+  rmSync(dataDir, { recursive: true, force: true })
+})
+
+test('task flow: organise, execute, suggest, reject with a standard, re-execute, pass', { timeout: 600_000 }, async () => {
+  const lin = new Client()
+  const zhou = new Client()
+  const { user: linUser } = await lin.call('POST', '/api/login', { email: 'lin@example.com', name: '林夏' })
+  await zhou.call('POST', '/api/login', { email: 'zhou@example.com', name: '周远' })
+
+  const { space } = await lin.call('POST', '/api/spaces', { name: '新支付上线', goalTitle: '新支付全量上线', goalDue: '2026-12-03', members: [{ email: 'zhou@example.com', name: '周远', title: '研发' }] })
+  const { spaces } = await zhou.call('GET', '/api/spaces')
+  assert.equal(spaces.length, 1, 'member sees the space')
+
+  const { task } = await lin.call('POST', `/api/spaces/${space.id}/tasks`, { text: '上线前写一份客服 FAQ' })
+  await app.jobs.idle(300_000)
+
+  let detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'review', 'organised, executed and delivered')
+  assert.equal(detail.task.owner_id, linUser.id)
+  assert.ok(detail.task.acceptance.length >= 1, 'assistant wrote acceptance criteria')
+  assert.equal(detail.artifacts.length, 1)
+
+  let { judgments } = await lin.call('GET', '/api/judgments')
+  const confirm = judgments.find((j: any) => j.ref_id === task.id)
+  assert.ok(confirm, 'owner got a confirmation item')
+  assert.equal(confirm.suggested_action, 'pass', 'personal agent suggested')
+
+  await lin.call('POST', `/api/judgments/${confirm.id}`, { action: 'reject', reason: '对外文档都要附客服话术', saveAsStandard: true })
+  const { standards } = await lin.call('GET', `/api/spaces/${space.id}/standards`)
+  assert.equal(standards[0].text, '对外文档都要附客服话术', 'reason became a team standard')
+
+  await app.jobs.idle(300_000)
+  detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'review', 're-executed after rejection')
+  assert.equal(detail.artifacts.length, 2)
+  assert.match(detail.artifacts[0].content, /客服话术/)
+
+  ;({ judgments } = await lin.call('GET', '/api/judgments'))
+  const second = judgments.find((j: any) => j.ref_id === task.id)
+  await lin.call('POST', `/api/judgments/${second.id}`, { action: 'pass' })
+  detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'done')
+
+  const { memory } = await lin.call('GET', `/api/spaces/${space.id}/memory`)
+  assert.ok(memory.some((m: any) => m.kind === 'standard'), 'standard recorded in memory')
+  const { items } = await lin.call('GET', '/api/worklog')
+  assert.ok(items.length >= 2, 'personal agent actions appear in the work log')
+})
+
+test('discussion flow: agent opens, participants reply, escalates, owner decides, task resumes', { timeout: 600_000 }, async () => {
+  const lin = new Client()
+  await lin.call('POST', '/api/login', { email: 'lin@example.com', name: '林夏' })
+  const { spaces } = await lin.call('GET', '/api/spaces')
+  const spaceId = spaces[0].id
+
+  const { task } = await lin.call('POST', `/api/spaces/${spaceId}/tasks`, { text: '新手引导交互的范围取舍' })
+  await app.jobs.idle(300_000)
+
+  const { discussions } = await lin.call('GET', `/api/spaces/${spaceId}/discussions`)
+  const disc = discussions.find((d: any) => d.task_id === task.id)
+  assert.ok(disc, 'executor opened a discussion')
+  assert.equal(disc.status, 'escalated')
+  const view = await lin.call('GET', `/api/discussions/${disc.id}`)
+  assert.ok(view.messages.length >= 3, 'question, replies and summary recorded')
+
+  const { judgments } = await lin.call('GET', '/api/judgments')
+  const decide = judgments.find((j: any) => j.kind === 'decide' && j.ref_id === disc.id)
+  assert.ok(decide, 'owner got a decision item')
+  assert.equal(decide.suggestion, '动效放二期')
+
+  await lin.call('POST', `/api/judgments/${decide.id}`, { action: 'accept' })
+  await app.jobs.idle(300_000)
+  const detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'review', 'task resumed and delivered after the decision')
+  assert.ok(detail.events.some((e: any) => e.text.includes('结论写回')))
+  const { memory } = await lin.call('GET', `/api/spaces/${spaceId}/memory`)
+  assert.ok(memory.some((m: any) => m.kind === 'decision' && m.text.includes('动效放二期')))
+})
+
+test('duplicate tasks are merged and handover moves ownership', { timeout: 600_000 }, async () => {
+  const lin = new Client()
+  const { user: linUser } = await lin.call('POST', '/api/login', { email: 'lin@example.com', name: '林夏' })
+  const chen = new Client()
+  const { user: chenUser } = await chen.call('POST', '/api/login', { email: 'chen@example.com', name: '陈一' })
+  const { space } = await lin.call('POST', '/api/spaces', { name: '产品组', members: [{ email: 'chen@example.com', name: '陈一', title: '研发' }] })
+
+  await lin.call('POST', `/api/spaces/${space.id}/tasks`, { text: '整理失败码' })
+  await app.jobs.idle(300_000)
+  const { task: dup } = await lin.call('POST', `/api/spaces/${space.id}/tasks`, { text: '重复：失败码梳理' })
+  await app.jobs.idle(300_000)
+  const d = await lin.call('GET', `/api/tasks/${dup.id}`)
+  assert.equal(d.task.status, 'merged')
+
+  const zhou = new Client()
+  const { user: zhouUser } = await zhou.call('POST', '/api/login', { email: 'zhou@example.com', name: '周远' })
+  await lin.call('POST', `/api/spaces/${space.id}/members`, { email: 'zhou@example.com', name: '周远', title: '研发' })
+  const result = await lin.call('POST', `/api/spaces/${space.id}/handover`, { leavingUserId: zhouUser.id, successorId: chenUser.id })
+  assert.equal(result.tasks, 0)
+  const info = await lin.call('GET', `/api/spaces/${space.id}`)
+  assert.ok(info.members.find((m: any) => m.id === zhouUser.id).left_at, 'leaver marked')
+  assert.equal(info.space.owner_id, linUser.id)
+})
