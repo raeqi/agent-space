@@ -121,6 +121,9 @@ export function seedDemo(db: Db): { spaces: number } {
   // unclaimed
   task(pay.id, { title: '新支付监控看板', status: 'unclaimed', owner: null, creator: people.lin, exec: null, created: at(0, 9, 20), live: '空间助理推荐周远' })
 
+  db.run(`UPDATE tasks SET source = 'plan' WHERE space_id = ? AND title IN ('新支付方案定稿','研发排期评估','回调重试','压测脚本','第 2 轮压测报告')`, pay.id)
+  db.run(`UPDATE tasks SET source = 'event:告警群' WHERE space_id = ? AND title = '新支付监控看板'`, pay.id)
+
   // standards, skills, files, memory
   const std = (spaceId: string, text: string, scope: string, source: string, uses: number, ts: number, enabled = 1, by: string | null = null) =>
     db.insert('standards', { id: newId('st'), space_id: spaceId, text, scope, source, created_by: by, enabled, uses, created_at: ts })
