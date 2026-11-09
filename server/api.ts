@@ -62,6 +62,13 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
   })
 
   app.get('/api/health', async () => ({ ok: true }))
+  // Lets the web app check the login state without a 401 in the console.
+  app.get('/api/session', async (req) => {
+    const raw = req.cookies.sid
+    const unsigned = raw ? req.unsignCookie(raw) : null
+    const row = unsigned?.valid && unsigned.value ? db.get<{ user_id: string }>('SELECT user_id FROM login_sessions WHERE token = ?', unsigned.value) : undefined
+    return { loggedIn: !!row }
+  })
   app.get('/api/config', async () => ({ accessCodeRequired: !!config.accessCode, model: config.model }))
 
   // ---------- me ----------
