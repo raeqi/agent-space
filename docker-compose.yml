@@ -1,0 +1,16 @@
+services:
+  agent-space:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+      COOKIE_SECRET: ${COOKIE_SECRET:-change-me-to-a-long-random-string}
+      ACCESS_CODE: ${ACCESS_CODE:-}
+      DSH_MODEL: ${DSH_MODEL:-deepseek-flash}
+    volumes:
+      - agent-space-data:/data
+    restart: unless-stopped
+
+volumes:
+  agent-space-data:
