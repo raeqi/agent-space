@@ -139,7 +139,7 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
 
   app.get('/api/spaces/:id', { preHandler: auth }, async (req) => {
     const id = space(req)
-    const s = domain.space(id)
+    const { webhook_token: _hidden, ...s } = domain.space(id)
     const counts = db.get(`SELECT
       SUM(status = 'triage') AS triage, SUM(status = 'unclaimed') AS unclaimed, SUM(status = 'in_progress') AS in_progress,
       SUM(status = 'review') AS review, SUM(status = 'done') AS done, COUNT(*) AS total FROM tasks WHERE space_id = ? AND status != 'merged'`, id)
@@ -150,6 +150,7 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
       counts,
       waiting: db.all(`SELECT j.id, j.kind, j.title, j.ref_id, u.name AS user_name, j.user_id FROM judgments j JOIN users u ON u.id = j.user_id WHERE j.space_id = ? AND j.status = 'open' ORDER BY j.created_at`, id),
       openDiscussions: db.all("SELECT id, title, status FROM discussions WHERE space_id = ? AND status != 'resolved' ORDER BY created_at DESC", id),
+      planning: !!db.get("SELECT 1 FROM jobs WHERE kind = 'plan' AND status IN ('queued','running') AND json_extract(payload, '$.spaceId') = ?", id),
       recentMemory: db.all('SELECT kind, text, created_at FROM memory WHERE space_id = ? ORDER BY created_at DESC LIMIT 5', id),
       activeTasks: db.all(`SELECT t.id, t.title, t.live, t.blocked_by_discussion, a.id AS agent_id, a.name AS agent_name FROM tasks t JOIN agents a ON a.id = t.executor_agent_id
         WHERE t.space_id = ? AND t.status = 'in_progress' ORDER BY t.updated_at DESC LIMIT 8`, id),
@@ -160,6 +161,42 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
     const id = space(req)
     const b = (req.body ?? {}) as Body
     return { space: domain.updateGoal(id, me(req).id, { goalTitle: str(b.goalTitle, 200), goalDue: str(b.goalDue, 20), goalMetrics: strArr(b.goalMetrics) }) }
+  })
+
+  // Event entry: external systems (webhooks, IM bots) turn events into tasks. Authenticated by the space's token.
+  app.post('/api/hooks/spaces/:id/events', async (req) => {
+    const header = req.headers.authorization ?? ''
+    const token = header.startsWith('Bearer ') ? header.slice(7) : str((req.query as Body).token, 200)
+    const id = (req.params as { id: string }).id
+    domain.spaceByWebhookToken(id, token)
+    const b = (req.body ?? {}) as Body
+    const t = domain.createTaskFromEvent(id, { source: str(b.source, 40) || 'webhook', text: str(b.text, 4000), from: str(b.from, 40) })
+    return { task: { id: t.id, status: t.status } }
+  })
+
+  app.get('/api/spaces/:id/hook', { preHandler: auth }, async (req) => {
+    const id = space(req)
+    return { url: `/api/hooks/spaces/${id}/events`, token: domain.webhookToken(id, me(req).id) }
+  })
+
+  app.post('/api/spaces/:id/hook/rotate', { preHandler: auth }, async (req) => {
+    const id = space(req)
+    return { token: domain.webhookToken(id, me(req).id, true) }
+  })
+
+  app.post('/api/spaces/:id/hook/test', { preHandler: auth }, async (req) => {
+    const id = space(req)
+    domain.webhookToken(id, me(req).id)
+    const b = (req.body ?? {}) as Body
+    const t = domain.createTaskFromEvent(id, { source: str(b.source, 40) || '测试事件', text: str(b.text, 4000), from: str(b.from, 40) })
+    return { task: { id: t.id } }
+  })
+
+  app.post('/api/spaces/:id/plan', { preHandler: auth }, async (req) => {
+    const id = space(req)
+    if (domain.space(id).owner_id !== me(req).id) throw new DomainError('只有 owner 可以让空间助理重新拆解', 403)
+    domain.requestPlan(id)
+    return { ok: true }
   })
 
   app.post('/api/spaces/:id/members', { preHandler: auth }, async (req) => {

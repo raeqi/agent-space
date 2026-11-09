@@ -61,6 +61,16 @@ ${TOOL_RULE}`, { ...domain.spaceContext(d.space_id), discussion: domain.discussi
 - 涉及目标、截止日期、资源投入、体验和工期取舍，或者发言方立场冲突且没有标准可依：调用 mcp__space__escalate_discussion，用一句话提炼分歧点并列出 2 到 3 个方案，交给 owner 定夺。
 ${TOOL_RULE}`, { ...domain.spaceContext(d.space_id), discussion: domain.discussionView(d.id), task: d.task_id ? domain.taskView(d.task_id) : null })
     }
+    case 'plan': {
+      const s = domain.space(String(payload.spaceId))
+      const tasks = domain.db.all('SELECT title, status, owner_id, due FROM tasks WHERE space_id = ? AND status != \'merged\' ORDER BY created_at', s.id)
+      return frame(kind, `
+空间有一个目标。请把它拆成接下来要做的一批任务，调用 mcp__space__plan_tasks 一次。
+- 只拆近期（两周内）要开始的 2 到 6 个任务，后面的等这批完成后再拆。已有任务（existing_tasks）不要重复。
+- 每个任务写清楚标题、说明、2 到 4 条验收标准；负责人从 members 里按档案和分工选，执行者从 specialists 里选，没有合适的就传 null。
+- 有截止日期的目标，按倒推给每个任务一个 due（YYYY-MM-DD）。
+${TOOL_RULE}`, { ...domain.spaceContext(s.id), existing_tasks: tasks, today: new Date().toISOString().slice(0, 10) })
+    }
     case 'decide_suggest': {
       const d = domain.discussion(String(payload.discussionId))
       return frame(kind, `

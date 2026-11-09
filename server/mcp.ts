@@ -78,6 +78,25 @@ export function buildMcpServer(domain: Domain, agent: Agent): McpServer {
       return { ok: true, status: t.status }
     }))
 
+    server.registerTool('plan_tasks', {
+      description: '把空间目标拆成一批任务（2 到 6 个），直接分配负责人和执行的专项 agent，任务会立刻开始执行。',
+      inputSchema: {
+        space_id: z.string(),
+        tasks: z.array(z.object({
+          title: z.string().min(1),
+          description: z.string().optional(),
+          acceptance: z.array(z.string()).max(10).optional(),
+          owner_user_id: z.string(),
+          executor_agent_id: z.string().nullable().optional(),
+          due: z.string().nullable().optional(),
+        })).min(1).max(6),
+        note: z.string().optional(),
+      },
+    }, guard((args: Parameters<Domain['planTasks']>[1]) => {
+      const created = domain.planTasks(agent, args)
+      return { ok: true, created: created.map((t) => ({ id: t.id, title: t.title, status: t.status })) }
+    }))
+
     server.registerTool('resolve_discussion', {
       description: '讨论在 agent 能定的范围内达成结论时使用：写下结论，结论会写回相关任务，被卡住的任务继续执行。',
       inputSchema: { discussion_id: z.string(), outcome: z.string().min(1), writeback_task_ids: z.array(z.string()).optional() },

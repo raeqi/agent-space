@@ -18,6 +18,7 @@ export type JobKind =
   | 'discussion_reply'
   | 'discussion_moderate'
   | 'decide_suggest'
+  | 'plan'
 
 export interface JobSink {
   enqueue(kind: JobKind, agentId: string, payload: Record<string, unknown>): void
@@ -57,6 +58,7 @@ export interface Task {
   merged_into: string | null
   blocked_by_discussion: string | null
   live: string
+  source: string
   created_at: number
   updated_at: number
 }
@@ -69,6 +71,7 @@ export interface Space {
   goal_due: string | null
   goal_metrics: string
   source: string
+  webhook_token: string | null
   created_at: number
 }
 
@@ -166,7 +169,7 @@ export class Domain {
     const space: Space = {
       id: newId('sp'), name, owner_id: ownerId,
       goal_title: input.goalTitle?.trim() || null, goal_due: input.goalDue?.trim() || null,
-      goal_metrics: JSON.stringify((input.goalMetrics ?? []).map((m) => m.trim()).filter(Boolean)), source: 'manual', created_at: now(),
+      goal_metrics: JSON.stringify((input.goalMetrics ?? []).map((m) => m.trim()).filter(Boolean)), source: 'manual', webhook_token: newToken(), created_at: now(),
     }
     this.db.tx(() => {
       this.db.insert('spaces', space as unknown as Record<string, unknown>)
@@ -180,7 +183,86 @@ export class Domain {
       if (m.email.trim()) this.addMember(space.id, ownerId, m.email, m.name ?? '', m.title ?? '')
     }
     this.remember(space.id, 'change', space.goal_title ? `创建空间，目标：${space.goal_title}${space.goal_due ? `（${space.goal_due}）` : ''}` : '创建空间')
+    if (space.goal_title) this.requestPlan(space.id)
     return space
+  }
+
+  /** Ask the space assistant to break the goal into the next batch of tasks. */
+  requestPlan(spaceId: string): void {
+    const s = this.space(spaceId)
+    if (!s.goal_title) return
+    const pending = this.db.get("SELECT 1 FROM jobs WHERE kind = 'plan' AND status IN ('queued','running') AND json_extract(payload, '$.spaceId') = ?", spaceId)
+    if (pending) return
+    this.jobs.enqueue('plan', this.assistantOf(spaceId).id, { spaceId, since: now() })
+  }
+
+  planTasks(agent: Agent, input: { space_id: string; tasks: Array<{ title: string; description?: string; acceptance?: string[]; owner_user_id: string; executor_agent_id?: string | null; due?: string | null }>; note?: string }): Task[] {
+    const s = this.space(input.space_id)
+    this.requireAgentInSpace(agent, s.id, 'assistant')
+    if (!s.goal_title) throw new DomainError('空间没有目标，不需要拆解')
+    if (!input.tasks?.length) throw new DomainError('至少拆出一个任务')
+    if (input.tasks.length > 6) throw new DomainError('一次最多拆 6 个任务，先拆近期要做的')
+    const open = new Set(this.db.all<{ title: string }>("SELECT title FROM tasks WHERE space_id = ? AND status NOT IN ('done','merged')", s.id).map((t) => t.title))
+    const created: Task[] = []
+    for (const spec of input.tasks) {
+      const title = spec.title.trim().slice(0, 80)
+      if (!title || open.has(title)) continue
+      if (!this.isMember(s.id, spec.owner_user_id)) throw new DomainError(`「${title}」的负责人必须是空间成员`)
+      let executor: Agent | null = null
+      if (spec.executor_agent_id) {
+        executor = this.agent(spec.executor_agent_id)
+        if (executor.kind !== 'specialist' || executor.space_id !== s.id) throw new DomainError(`「${title}」的执行者必须是本空间的专项 agent`)
+      }
+      const t: Task = {
+        id: newId('t'), space_id: s.id, raw_input: `按目标拆解：${title}`, title, description: spec.description?.trim() ?? '',
+        acceptance: JSON.stringify((spec.acceptance ?? []).map((a) => a.trim()).filter(Boolean).slice(0, 10)),
+        status: executor ? 'in_progress' : 'unclaimed', creator_id: s.owner_id, owner_id: spec.owner_user_id, executor_agent_id: executor?.id ?? null,
+        due: spec.due || null, merged_into: null, blocked_by_discussion: null, live: executor ? `${executor.name}准备开始` : '等待认领',
+        source: 'plan', created_at: now(), updated_at: now(),
+      }
+      this.db.insert('tasks', t as unknown as Record<string, unknown>)
+      this.event(t.id, 'agent', agent.id, agent.name, `按目标「${s.goal_title}」拆出这个任务，负责人 ${this.user(spec.owner_user_id).name}${executor ? `，交给${executor.name}执行` : ''}`)
+      if (executor) this.jobs.enqueue('execute', executor.id, { taskId: t.id })
+      open.add(title)
+      created.push(t)
+    }
+    if (created.length === 0) throw new DomainError('拆出的任务都和已有任务重复')
+    this.remember(s.id, 'change', `空间助理按目标拆出 ${created.length} 个任务：${created.map((t) => t.title).join('、')}${input.note ? `。${input.note}` : ''}`)
+    this.touch(s.id)
+    return created
+  }
+
+  /** An external event (webhook, IM message) becomes a task and goes through the normal organise step. */
+  createTaskFromEvent(spaceId: string, input: { source: string; text: string; from?: string }): Task {
+    const s = this.space(spaceId)
+    const text = input.text.trim()
+    if (!text) throw new DomainError('事件内容不能为空')
+    const source = (input.source.trim() || '外部事件').slice(0, 40)
+    const t: Task = {
+      id: newId('t'), space_id: s.id, raw_input: `${input.from ? `${input.from.slice(0, 40)}：` : ''}${text.slice(0, 4000)}`, title: text.slice(0, 60), description: '', acceptance: '[]',
+      status: 'triage', creator_id: s.owner_id, owner_id: null, executor_agent_id: null, due: null, merged_into: null,
+      blocked_by_discussion: null, live: '空间助理在整理', source: `event:${source}`, created_at: now(), updated_at: now(),
+    }
+    this.db.insert('tasks', t as unknown as Record<string, unknown>)
+    this.event(t.id, 'system', null, source, `事件触发${input.from ? `，来自${input.from.slice(0, 40)}` : ''}`)
+    this.jobs.enqueue('triage', this.assistantOf(s.id).id, { taskId: t.id })
+    this.touch(s.id)
+    return t
+  }
+
+  webhookToken(spaceId: string, userId: string, rotate = false): string {
+    const s = this.space(spaceId)
+    if (s.owner_id !== userId) throw new DomainError('只有 owner 可以查看事件入口', 403)
+    if (s.webhook_token && !rotate) return s.webhook_token
+    const token = newToken()
+    this.db.update('spaces', spaceId, { webhook_token: token })
+    return token
+  }
+
+  spaceByWebhookToken(spaceId: string, token: string): Space {
+    const s = this.space(spaceId)
+    if (!s.webhook_token || !token || s.webhook_token !== token) throw new DomainError('事件入口的 token 不对', 401)
+    return s
   }
 
   space(id: string): Space {
@@ -198,6 +280,7 @@ export class Domain {
       goal_metrics: JSON.stringify((input.goalMetrics ?? []).filter(Boolean)),
     })
     this.remember(spaceId, 'change', `目标更新为：${input.goalTitle || '（无目标）'}${input.goalDue ? `，截止 ${input.goalDue}` : ''}`)
+    if (input.goalTitle?.trim() && input.goalTitle.trim() !== s.goal_title) this.requestPlan(spaceId)
     this.touch(spaceId)
     return this.space(spaceId)
   }
@@ -279,7 +362,7 @@ export class Domain {
     const t: Task = {
       id: newId('t'), space_id: spaceId, raw_input: raw, title: raw.slice(0, 60), description: '', acceptance: '[]',
       status: 'triage', creator_id: userId, owner_id: null, executor_agent_id: null, due: null, merged_into: null,
-      blocked_by_discussion: null, live: '空间助理在整理', created_at: now(), updated_at: now(),
+      blocked_by_discussion: null, live: '空间助理在整理', source: 'manual', created_at: now(), updated_at: now(),
     }
     this.db.insert('tasks', t as unknown as Record<string, unknown>)
     this.event(t.id, 'user', userId, this.user(userId).name, '发起任务')
@@ -517,6 +600,8 @@ export class Domain {
         if (input.action === 'pass') {
           this.db.update('tasks', t.id, { status: 'done', live: '已完成', updated_at: now() })
           this.event(t.id, 'user', userId, me.name, `通过${reason ? `：${reason}` : ''}`)
+          const left = this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE space_id = ? AND status NOT IN ('done','merged')", t.space_id)
+          if ((left?.n ?? 0) === 0) this.requestPlan(t.space_id)
         } else {
           this.db.update('tasks', t.id, { status: 'in_progress', live: '根据打回意见修改', updated_at: now() })
           this.event(t.id, 'user', userId, me.name, `打回：${reason}`)

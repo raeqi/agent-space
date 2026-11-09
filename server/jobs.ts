@@ -22,6 +22,7 @@ const ACTIVITY: Record<JobKind, string> = {
   discussion_reply: '在讨论里发言',
   discussion_moderate: '总结讨论',
   decide_suggest: '准备定夺建议',
+  plan: '按目标拆解任务',
 }
 
 /**
@@ -113,6 +114,7 @@ export class JobRunner implements JobSink {
       d.setActivity(agent.id, ACTIVITY[job.kind])
       if (job.kind === 'execute') d.db.update('tasks', String(payload.taskId), { live: `${agent.name}在${payload.feedback ? '按打回意见修改' : '执行'}`, updated_at: now() })
       if (job.kind === 'execute' || job.kind === 'triage') d.touch(d.task(String(payload.taskId)).space_id)
+      if (job.kind === 'plan') d.touch(String(payload.spaceId))
       const prompt = buildPrompt(d, job.kind, agent.id, payload)
       const result = await this.pool.run(agent, prompt)
       this.db.update('jobs', job.id, { dsh_session_id: result.sessionId })
@@ -145,6 +147,7 @@ export class JobRunner implements JobSink {
       case 'discussion_reply':
       case 'discussion_moderate': return d.discussion(String(p.discussionId)).status === 'open'
       case 'decide_suggest': return d.discussion(String(p.discussionId)).status === 'escalated' && !this.hasOpenJudgment('decide', String(p.discussionId))
+      case 'plan': return !!d.space(String(p.spaceId)).goal_title
     }
   }
 
@@ -160,6 +163,7 @@ export class JobRunner implements JobSink {
       }
       case 'discussion_moderate': return d.discussion(String(p.discussionId)).status !== 'open'
       case 'decide_suggest': return this.hasOpenJudgment('decide', String(p.discussionId)) || d.discussion(String(p.discussionId)).status !== 'escalated'
+      case 'plan': return !!this.db.get("SELECT 1 FROM tasks WHERE space_id = ? AND source = 'plan' AND created_at >= ?", String(p.spaceId), Number(p.since ?? 0))
     }
   }
 
@@ -203,6 +207,10 @@ export class JobRunner implements JobSink {
         d.escalateDiscussion(d.assistantOf(disc.space_id), { discussion_id: disc.id, summary: `空间助理没能总结这次讨论（${short}），请 owner 直接看发言后定夺`, options: [] })
         return
       }
+      case 'plan':
+        d.remember(String(p.spaceId), 'change', `空间助理没能按目标拆出任务，请手动发起。原因：${short}`)
+        d.touch(String(p.spaceId))
+        return
       case 'decide_suggest': {
         const disc = d.discussion(String(p.discussionId))
         if (this.hasOpenJudgment('decide', disc.id)) return

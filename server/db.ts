@@ -210,6 +210,14 @@ export class Db {
     this.sql = new DatabaseSync(path)
     this.sql.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
     this.sql.exec(SCHEMA)
+    this.ensureColumn('tasks', 'source', "TEXT NOT NULL DEFAULT 'manual'")
+    this.ensureColumn('spaces', 'webhook_token', 'TEXT')
+  }
+
+  /** Additive migration for databases created by earlier versions. */
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const cols = this.sql.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === column)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
   }
 
   all<T = Row>(query: string, ...params: unknown[]): T[] {
