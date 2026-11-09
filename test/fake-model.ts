@@ -48,6 +48,15 @@ function script(job: string, ctx: Ctx): ToolCall[] | string {
       return [{ name: 'resolve_discussion', input: { discussion_id: ctx.discussion.id, outcome: '按大多数意见执行' } }]
     case 'decide_suggest':
       return [{ name: 'suggest_decision', input: { discussion_id: ctx.discussion.id, choice: ctx.options?.[1] ?? '按计划执行', basis: '空间目标优先：保上线日期' } }]
+    case 'plan':
+      return [{ name: 'plan_tasks', input: {
+        space_id: ctx.space.id,
+        tasks: [
+          { title: '梳理上线范围', description: '按目标列出范围', acceptance: ['结论放在第一段'], owner_user_id: ctx.space.owner_user_id, executor_agent_id: ctx.specialists[0].agent_id, due: ctx.space.goal?.due ?? null },
+          { title: '设计验收清单', acceptance: ['覆盖成功标准'], owner_user_id: ctx.members.at(-1).user_id, executor_agent_id: ctx.specialists[2]?.agent_id ?? null },
+        ],
+        note: '先拆两周内要开始的',
+      } }]
     case 'memory_ask':
       return `根据记录：${(ctx.memory as Ctx[]).map((m) => m.text).slice(-1)[0] ?? '没有相关记录'}`
     default:

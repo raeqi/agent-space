@@ -156,3 +156,29 @@ test('duplicate tasks are merged and handover moves ownership', { timeout: 600_0
   assert.ok(info.members.find((m: any) => m.id === zhouUser.id).left_at, 'leaver marked')
   assert.equal(info.space.owner_id, linUser.id)
 })
+
+test('a goal is broken into tasks automatically, and external events become tasks', { timeout: 600_000 }, async () => {
+  const lin = new Client()
+  await lin.call('POST', '/api/login', { email: 'lin@example.com', name: '林夏' })
+  const { space } = await lin.call('POST', '/api/spaces', { name: '目标空间', goalTitle: '月底前上线退款入口', goalDue: '2026-12-31', members: [{ email: 'he@example.com', name: '何敏', title: '测试' }] })
+  await app.jobs.idle(300_000)
+
+  const { tasks } = await lin.call('GET', `/api/spaces/${space.id}/tasks`)
+  const planned = tasks.filter((t: any) => t.source === 'plan')
+  assert.equal(planned.length, 2, 'assistant planned tasks from the goal')
+  assert.ok(planned.every((t: any) => t.status === 'review'), 'planned tasks were executed and delivered')
+  const { memory } = await lin.call('GET', `/api/spaces/${space.id}/memory`)
+  assert.ok(memory.some((m: any) => m.text.includes('按目标拆出 2 个任务')))
+
+  const hook = await lin.call('GET', `/api/spaces/${space.id}/hook`)
+  const bad = await fetch(`${base}${hook.url}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer nope' }, body: JSON.stringify({ text: 'x' }) })
+  assert.equal(bad.status, 401)
+  const res = await fetch(`${base}${hook.url}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${hook.token}` }, body: JSON.stringify({ source: '客服群', from: '客户 A', text: '退款按钮在安卓上点不动' }) })
+  assert.equal(res.status, 200)
+  const { task } = (await res.json()) as { task: { id: string } }
+  await app.jobs.idle(300_000)
+  const detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.source, 'event:客服群')
+  assert.equal(detail.task.status, 'review', 'event task was organised, executed and delivered')
+  assert.match(detail.task.raw_input, /客户 A/)
+})
