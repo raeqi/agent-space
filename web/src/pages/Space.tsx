@@ -63,7 +63,8 @@ export function Overview() {
   const done = Number(c.done ?? 0)
   const left = daysLeft(s.goal_due)
   const isOwner = s.owner_id === me.user.id
-  const working = data.agents.filter((a: any) => a.activity)
+  const busyAgents = new Set(data.activeTasks.map((t: any) => t.agent_id))
+  const working = data.agents.filter((a: any) => a.activity && !busyAgents.has(a.id))
   const personal = data.members.filter((m: any) => !m.left_at && m.agent_activity)
 
   return (
@@ -117,9 +118,14 @@ export function Overview() {
         <section>
           <div className="section-label"><span>agent 此刻</span></div>
           <div className="list">
+            {data.activeTasks.map((t: any) => (
+              <Link key={t.id} to={`/spaces/${s.id}/tasks/${t.id}`} className="stack" style={{ gap: 2, padding: '8px 0', textDecoration: 'none' }}>
+                <span className="sm">{t.agent_name}<span className="muted">，{t.title}</span></span><Live tone={t.blocked_by_discussion || /慢|晚/.test(t.live) ? 'warn' : undefined}>{t.live}</Live>
+              </Link>
+            ))}
             {working.map((a: any) => <div key={a.id} className="stack" style={{ gap: 2, padding: '8px 0' }}><span className="sm">{a.name}</span><Live>{a.activity}</Live></div>)}
             {personal.map((m: any) => <div key={m.id} className="stack" style={{ gap: 2, padding: '8px 0' }}><span className="sm">{m.name}的 agent</span><Live>{m.agent_activity}</Live></div>)}
-            {working.length + personal.length === 0 && <p className="sm muted" style={{ padding: '8px 0' }}>都空闲</p>}
+            {data.activeTasks.length + working.length + personal.length === 0 && <p className="sm muted" style={{ padding: '8px 0' }}>都空闲</p>}
           </div>
         </section>
       </aside>

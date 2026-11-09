@@ -151,6 +151,8 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
       waiting: db.all(`SELECT j.id, j.kind, j.title, j.ref_id, u.name AS user_name, j.user_id FROM judgments j JOIN users u ON u.id = j.user_id WHERE j.space_id = ? AND j.status = 'open' ORDER BY j.created_at`, id),
       openDiscussions: db.all("SELECT id, title, status FROM discussions WHERE space_id = ? AND status != 'resolved' ORDER BY created_at DESC", id),
       recentMemory: db.all('SELECT kind, text, created_at FROM memory WHERE space_id = ? ORDER BY created_at DESC LIMIT 5', id),
+      activeTasks: db.all(`SELECT t.id, t.title, t.live, t.blocked_by_discussion, a.id AS agent_id, a.name AS agent_name FROM tasks t JOIN agents a ON a.id = t.executor_agent_id
+        WHERE t.space_id = ? AND t.status = 'in_progress' ORDER BY t.updated_at DESC LIMIT 8`, id),
     }
   })
 
