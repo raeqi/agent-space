@@ -61,7 +61,7 @@ export interface FakeModel {
   close(): Promise<void>
 }
 
-export async function startFakeModel(): Promise<FakeModel> {
+export async function startFakeModel(port = 0): Promise<FakeModel> {
   const state = { requests: 0 }
   const server = http.createServer(async (req, res) => {
     let body = ''
@@ -95,17 +95,16 @@ export async function startFakeModel(): Promise<FakeModel> {
     ev('message_stop', {})
     res.end()
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const { port } = server.address() as AddressInfo
+  await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve))
+  const bound = (server.address() as AddressInfo).port
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: `http://127.0.0.1:${bound}`,
     get requests() { return state.requests },
     close: () => new Promise((resolve) => server.close(() => resolve())),
   }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.env.PORT ?? 18080)
-  const m = await startFakeModel()
-  console.log(`fake model listening at ${m.url} (requested ${port} ignored; use MODEL_BASE_URL=${m.url})`)
+  const m = await startFakeModel(Number(process.env.PORT ?? 18080))
+  console.log(`scripted model listening at ${m.url}; start the server with MODEL_BASE_URL=${m.url}`)
 }
