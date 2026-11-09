@@ -13,6 +13,7 @@
     "dev:web": "vite",
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server/index.ts",
+    "seed": "node --env-file-if-exists=.env server/seed.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --test-concurrency=1 test/*.test.ts"
   },

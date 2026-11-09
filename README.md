@@ -36,6 +36,12 @@ npm start               # http://localhost:8787
 DEEPSEEK_API_KEY=sk-... COOKIE_SECRET=$(openssl rand -hex 32) docker compose up -d
 ```
 
+想先看看效果，可以先写入演示数据：两个空间、六个人，任务、讨论、待处理、标准、记忆、Skills 和资料都处在不同状态。数据只会写进空库：
+
+```sh
+npm run seed     # 然后用 lin@demo.local 登录（林夏，新支付上线的 owner）
+```
+
 开发时，`npm run dev` 启动后端（文件变动自动重启），`npm run dev:web` 启动带热更新的前端（http://localhost:5173，`/api` 代理到 8787）。
 
 登录只需要邮箱和名字，第一次登录时自动创建账号和个人 agent。设置 `ACCESS_CODE` 后，登录时还要输入访问码。
