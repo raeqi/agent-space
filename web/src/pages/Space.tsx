@@ -74,8 +74,9 @@ export function Overview() {
           <section className="card pad stack" style={{ gap: 12 }}>
             <div className="spread">
               <span className="stack" style={{ gap: 2 }}><h2>{s.goal_title}</h2><span className="sm muted">{s.goal_due ? `${s.goal_due}${left !== null ? (left >= 0 ? `，还有 ${left} 天` : `，已过 ${-left} 天`) : ''}` : '未定日期'}</span></span>
-              {isOwner && <button className="btn ghost" onClick={() => setEditing(true)}>修改</button>}
+              {isOwner && <span className="row"><button className="btn ghost" disabled={data.planning} onClick={() => void api('POST', `/api/spaces/${s.id}/plan`).then(reload)}>再拆一批</button><button className="btn ghost" onClick={() => setEditing(true)}>修改</button></span>}
             </div>
+            {data.planning && <Live>空间助理在按目标拆任务</Live>}
             {s.goal_metrics.length > 0 && <div className="row wrap">{s.goal_metrics.map((m: string) => <span key={m} className="chip" style={{ fontSize: 13, color: 'var(--ink)' }}>{m}</span>)}</div>}
             <div className="stack" style={{ gap: 6 }}>
               <div className="spread sm"><span>完成 {done} / {total} 个任务</span>{Number(c.review ?? 0) > 0 && <span className="muted">{c.review} 个待确认</span>}</div>
@@ -130,6 +131,35 @@ export function Overview() {
         </section>
       </aside>
     </div>
+  )
+}
+
+function HookCard({ spaceId }: { spaceId: string }) {
+  const { data, reload } = useApi<{ url: string; token: string }>(`/api/spaces/${spaceId}/hook`)
+  const [show, setShow] = useState(false)
+  const [text, setText] = useState('')
+  const [sent, setSent] = useState('')
+  if (!data) return null
+  const url = `${window.location.origin}${data.url}`
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await api('POST', `/api/spaces/${spaceId}/hook/test`, { text, source: '测试事件' })
+    setText(''); setSent('已转成任务')
+  }
+  return (
+    <section className="card pad stack sm">
+      <h3>事件入口</h3>
+      <span className="small muted">外部系统把事件 POST 到这里，空间助理会整理成任务</span>
+      <code className="small" style={{ wordBreak: 'break-all', background: 'var(--side)', padding: '6px 8px', borderRadius: 6 }}>{url}</code>
+      <span className="row small"><span className="muted">token</span><code style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{show ? data.token : '••••••••••••'}</code>
+        <button className="btn ghost" onClick={() => setShow(!show)}>{show ? '隐藏' : '显示'}</button>
+        <button className="btn ghost" onClick={() => void api('POST', `/api/spaces/${spaceId}/hook/rotate`).then(reload)}>重置</button></span>
+      <form className="row" onSubmit={send}>
+        <input className="input" aria-label="模拟一条事件" placeholder="模拟一条事件" value={text} onChange={(e) => { setText(e.target.value); setSent('') }} />
+        <button className="btn" disabled={!text.trim()}>发送</button>
+      </form>
+      {sent && <span className="small muted">{sent}</span>}
+    </section>
   )
 }
 
@@ -193,6 +223,7 @@ export function Members() {
           <div className="row"><input className="input" aria-label="名字" placeholder="名字" value={name} onChange={(e) => setName(e.target.value)} /><input className="input" aria-label="分工" placeholder="分工" value={title} onChange={(e) => setTitle(e.target.value)} /></div>
           <button className="btn primary" disabled={!email.trim()}>邀请</button>
         </form>
+        {isOwner && <HookCard spaceId={spaceId} />}
         <section className="card pad stack sm">
           <h3>空间 agent</h3>
           {data.agents.map((a: any) => <span key={a.id} className="spread"><span>{a.name}</span>{a.activity ? <Live>{a.activity}</Live> : <span className="muted small">空闲</span>}</span>)}

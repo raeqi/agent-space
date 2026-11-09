@@ -7,6 +7,12 @@ import { useSpace } from './Space.tsx'
 
 const ORDER = ['review', 'in_progress', 'unclaimed', 'triage', 'done']
 
+function sourceLabel(source: string | undefined): string {
+  if (source === 'plan') return '目标拆解'
+  if (source?.startsWith('event:')) return `来自${source.slice(6)}`
+  return ''
+}
+
 function liveTone(t: any): 'warn' | undefined {
   return t.blocked_by_discussion || t.status === 'review' || /失败|没能/.test(t.live) ? 'warn' : undefined
 }
@@ -47,7 +53,7 @@ function ListView({ tasks, spaceId, selected }: { tasks: any[]; spaceId: string;
             <div className="list">
               {rows.map((t) => (
                 <Link key={t.id} to={`/spaces/${spaceId}/tasks/${t.id}`} className={`rowlink${t.id === selected ? ' sel' : ''}`}>
-                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}><span>{t.title}</span>{t.status !== 'done' && <Live tone={liveTone(t)}>{t.live}</Live>}</span>
+                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}><span>{t.title}{sourceLabel(t.source) && <span className="small muted" style={{ marginLeft: 8 }}>{sourceLabel(t.source)}</span>}</span>{t.status !== 'done' && <Live tone={liveTone(t)}>{t.live}</Live>}</span>
                   {t.owner_id ? <span title={t.owner_name}><Avatar name={t.owner_name} id={t.owner_id} /></span> : <span style={{ width: 22 }} />}
                   <span className="small muted" style={{ width: 80 }}>{t.executor_name ?? '—'}</span>
                   <span style={{ width: 72, display: 'flex', justifyContent: 'flex-end' }}><StatusTag status={t.status} blocked={!!t.blocked_by_discussion} /></span>
@@ -99,7 +105,7 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
       <div className="spread"><StatusTag status={t.status} blocked={!!t.blocked_by_discussion} /><button className="btn ghost" aria-label="关闭" onClick={() => navigate(`/spaces/${spaceId}/tasks`)}>✕</button></div>
       <div className="stack" style={{ gap: 4 }}>
         <h2>{t.title}</h2>
-        {(t.owner_name || t.executor_name) && <span className="sm muted">{[t.owner_name && `负责人 ${t.owner_name}`, t.executor_name && `执行 ${t.executor_name}`, t.due && `截止 ${t.due}`].filter(Boolean).join('，')}</span>}
+        {(t.owner_name || t.executor_name || sourceLabel(t.source)) && <span className="sm muted">{[sourceLabel(t.source), t.owner_name && `负责人 ${t.owner_name}`, t.executor_name && `执行 ${t.executor_name}`, t.due && `截止 ${t.due}`].filter(Boolean).join('，')}</span>}
         {t.status !== 'done' && t.live && <Live tone={liveTone(t)}>{t.live}</Live>}
       </div>
       {t.merged_into && <Link to={`/spaces/${spaceId}/tasks/${t.merged_into}`} className="sm">查看合并后的任务</Link>}
