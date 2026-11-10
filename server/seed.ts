@@ -187,6 +187,40 @@ export function seedDemo(db: Db): { spaces: number } {
   mem(team.id, 'change', '创建空间', at(20, 9))
   mem(team.id, 'decision', '本季度优先保证新支付按时上线（王磊定夺）', at(10, 10))
 
+  // Isolated mock spaces; no real agent jobs are scheduled.
+  for (const name of ['用户研究', '秋季发布准备']) {
+    const demo = domain.createSpace(people.lin.id, { name })
+    const executor = domain.spaceAgents(demo.id).find(a => a.name === '通用 agent')!
+    const cases = [
+      ['整理访谈问题', 'triage', '空间助理正在补全验收标准'],
+      ['联系外部顾问', 'unclaimed', '等待负责人认领'],
+      ['汇总用户反馈', 'in_progress', '已整理 18/30 条反馈'],
+      ['修订研究总结', 'in_progress', '根据打回意见补充样本量和证据'],
+      ['检查资料链接', 'in_progress', '来源无法访问，需要补充资料'],
+      ['确认访谈提纲', 'review', '已交付，等负责人确认'],
+      ['检查发布清单', 'review', '自检发现遗漏，建议打回'],
+      ['整理历史问题', 'done', '已完成'],
+    ]
+    for (const [title, status, live] of cases) {
+      const id = task(demo.id, { title: title!, status: status!, live, owner: status === 'triage' || status === 'unclaimed' ? null : people.lin, creator: people.lin, exec: status === 'triage' || status === 'unclaimed' ? null : executor, acceptance: ['附来源', '明确行动负责人'], created: at(1, 10) })
+      ev(id, '空间助理', live!, at(0, 9))
+      if (status === 'review' || status === 'done') {
+        const pass = title !== '检查发布清单'
+        art(demo.id, id, { title: title!, kind: '文档', status: status === 'done' ? 'approved' : 'pending', ts: at(0, 9), content: '# '+title+'\n\n演示产物：已完成主要整理。来源为团队共享资料，下一步由林夏确认。', check: [{ item: '附来源', ok: true }, { item: '明确行动负责人', ok: pass }] })
+        if (status === 'review') db.insert('judgments', { id: newId('j'), space_id: demo.id, user_id: people.lin.id, kind: 'confirm', ref_id: id, title: title!, suggestion: pass ? '通过：内容完整' : '打回：需要补充负责人', suggested_action: pass ? 'pass' : 'reject', basis: '验收标准', created_at: at(0, 9) })
+      }
+    }
+    mem(demo.id, 'change', '演示空间，内容均为模拟数据', at(1, 9))
+  }
+
+  const helpTask = task(team.id, { title: '确认反馈标签口径', status: 'in_progress', owner: people.lin, creator: people.lin, exec: tag('数据 agent'), created: at(0, 9), live: '正在讨论标签是否允许多选' })
+  const openDiscussion = newId('d')
+  db.insert('discussions', { id: openDiscussion, space_id: team.id, task_id: helpTask, title: '反馈标签是否允许多选', question: '同一条反馈同时涉及性能与体验时，使用主标签还是多个标签？', status: 'open', opened_by_agent_id: tag('数据 agent').id, created_at: at(0, 9) })
+  db.update('tasks', helpTask, { blocked_by_discussion: openDiscussion })
+  for (const agent of [pa(people.lin), pa(people.su), tag('数据 agent')]) db.insert('discussion_participants', { discussion_id: openDiscussion, agent_id: agent.id })
+  msg(openDiscussion, tag('数据 agent'), '建议保留多个标签，汇总时按反馈去重。', at(0, 9))
+  msg(openDiscussion, pa(people.su), '同意多选，但需要保留原始反馈，便于复核分类。', at(0, 9, 2))
+
   // ---------- work log for 林夏 ----------
   const log = (text: string, spaceId: string, basis: string, link: string, ts: number) =>
     db.insert('work_log', { id: newId('wl'), user_id: people.lin.id, agent_id: pa(people.lin).id, space_id: spaceId, text, basis, link, created_at: ts })
@@ -195,7 +229,7 @@ export function seedDemo(db: Db): { spaces: number } {
   log('看了「新手引导流失分析」的交付，建议通过', team.id, '团队标准「分析报告结论放第一页」', `/spaces/${team.id}/tasks/${funnel}`, at(0, 8))
   log('在讨论「FAQ 覆盖哪些失败码」里替你陈述立场', pay.id, '', `/spaces/${pay.id}/discussions/${d2}`, at(1, 16, 12))
 
-  return { spaces: 2 }
+  return { spaces: 4 }
 }
 
 function dateIn(days: number): string {

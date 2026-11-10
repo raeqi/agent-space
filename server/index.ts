@@ -4,7 +4,8 @@ import { createApp } from './app.ts'
 const config = loadConfig()
 
 if (!process.env.DEEPSEEK_API_KEY && !config.modelBaseUrl) {
-  console.warn('[agent-space] DEEPSEEK_API_KEY 未设置：agent 无法调用模型，任务会停在“整理中”。')
+  console.error('[agent-space] 请复制 .env.example 为 .env，填写你自己的 DEEPSEEK_API_KEY。项目不提供共享密钥。')
+  process.exit(1)
 }
 if (config.cookieSecret.startsWith('dev-only')) {
   console.warn('[agent-space] COOKIE_SECRET 使用的是开发默认值，生产环境请设置。')
