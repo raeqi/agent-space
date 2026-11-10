@@ -14,6 +14,7 @@
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server/index.ts",
     "seed": "node --env-file-if-exists=.env server/seed.ts",
+    "verify:live": "node --env-file=.env scripts/verify-live.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --test-concurrency=1 test/*.test.ts"
   },

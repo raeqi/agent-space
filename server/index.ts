@@ -1,6 +1,19 @@
 import { loadConfig } from './config.ts'
 import { createApp } from './app.ts'
 
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
+if (nodeMajor! < 24 || (nodeMajor === 24 && nodeMinor! < 9)) {
+  console.error('[agent-space] Node.js 24.9+ is required. Current: ' + process.version + ' (' + process.arch + '). Use a supported Node matching your installed native dependencies.')
+  process.exit(1)
+}
+
+try {
+  await import('node-addon-require-builtin')
+} catch {
+  console.error('[agent-space] Native runtime dependency could not load for ' + process.platform + '/' + process.arch + '. Use a matching Node architecture and reinstall dependencies with that Node before starting.')
+  process.exit(1)
+}
+
 const config = loadConfig()
 
 if (!process.env.DEEPSEEK_API_KEY && !config.modelBaseUrl) {
