@@ -20,7 +20,8 @@ function script(job: string, ctx: Ctx): ToolCall[] | string {
       return [{ name: 'triage_task', input: {
         task_id: t.id, title: String(t.raw_input).slice(0, 30), description: `整理自：${t.raw_input}`,
         acceptance: ['结论放在第一段', '覆盖原始要求里的每一点'], owner_user_id: t.creator_user_id,
-        executor_agent_id: ctx.specialists[0].agent_id, note: '按专长分配',
+        // "定时" tasks: the assistant leaves the executor empty, which must not stall the task.
+        executor_agent_id: /定时/.test(t.raw_input) ? null : ctx.specialists[0].agent_id, note: '按专长分配',
       } }]
     }
     case 'execute': {

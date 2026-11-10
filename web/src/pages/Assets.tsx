@@ -70,7 +70,7 @@ export function Skills() {
           </div>
         ))}
       </div>
-      {data && data.skills.length === 0 && !open && <div className="card empty">专项 agent 执行任务时会按需调用这里的 skill</div>}
+      {data && data.skills.length === 0 && !open && <div className="card empty">agent 执行任务时会按需调用这里的 skill</div>}
     </AssetPage>
   )
 }

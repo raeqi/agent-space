@@ -22,7 +22,7 @@ export function buildPrompt(domain: Domain, kind: JobKind, agentId: string, payl
 有成员刚发起了一个任务，请你整理它，然后调用 mcp__space__triage_task 一次。
 - 把原话改写成清楚的标题和说明，写 2 到 5 条可检查的验收标准（要体现相关的团队标准）。
 - 负责人从成员里选：优先选发起人，除非成员档案显示别人明显更合适。负责人必须是 members 里的 user_id。
-- 执行者从 specialists 里选最合适的 agent_id；如果没有合适的专项 agent，executor_agent_id 传 null，任务进入待认领。
+- 执行者从 specialists 里选最合适的 agent_id。所有执行 agent 都能写文档、查资料和网页、跑命令、写和运行脚本、创建定时任务；明显属于某个专项的交给它，其余（包括要动手操作、定时执行的任务）交给「通用 agent」。不要因为"没有对应专项"就不分配。执行 agent 是内部分工，成员看不到：note 里不要提具体是哪个 agent。
 - 如果和 open_tasks 里的任务实质重复，用 merge_into_task_id 合并，并在 note 说明原因。
 ${TOOL_RULE}`, { ...domain.spaceContext(t.space_id), task: { id: t.id, raw_input: t.raw_input, creator_user_id: t.creator_id }, open_tasks: open })
     }
@@ -32,6 +32,8 @@ ${TOOL_RULE}`, { ...domain.spaceContext(t.space_id), task: { id: t.id, raw_input
 你是这个任务的执行者。请完成它并调用 mcp__space__submit_artifact 提交 Markdown 产物，附上按验收标准和团队标准逐条做的自检。
 - 开始时先用 mcp__space__post_progress 说一句你要怎么做。需要背景时用 mcp__space__read_file 读资料，用 mcp__space__use_skill 读相关 skill。
 - 如果有必须由别人拍板的问题（例如范围、日期、体验和工期的取舍），不要自己猜：调用 mcp__space__open_discussion 发起讨论，然后结束本轮。
+- 除了空间工具，你还有完整的本地能力，任务需要动手时直接做，不要只写方案：bash 跑命令、read/write/edit 读写你工作目录里的文件、web_search/web_fetch 查网页、schedule_create/schedule_list/schedule_edit 创建和管理定时任务。
+- 任务要求定时或重复执行时，用 schedule_create 真的创建它（按要求设好时间规则、次数和 Asia/Shanghai 时区，结束条件用 RRULE 的 COUNT 或 UNTIL）。target 优先用 new_once（投到当前会话会排队到本轮结束才执行）；如果报错再用 this_session。定时任务的 prompt 必须写成可以独立执行的完整指令，并要求每次执行后调用 mcp__space__post_progress（task_id: ${t.id}）把这次的结果写回任务，否则成员在空间里看不到执行结果。创建后用 schedule_view 回读确认，再在产物里写清楚：任务 id、时间规则、接下来几次触发时间、结束时间，以及怎么暂停或删除。
 ${payload.feedback ? `- 负责人打回了上一版，意见是：「${String(payload.feedback)}」。请据此修改后重新提交。` : ''}
 ${payload.discussionOutcome ? `- 之前的讨论已有结论：「${String(payload.discussionOutcome)}」。按结论继续完成任务。` : ''}
 ${TOOL_RULE}`, { ...domain.spaceContext(t.space_id), task: domain.taskView(t.id), you: { agent_id: agent.id, name: agent.name } })
@@ -67,7 +69,7 @@ ${TOOL_RULE}`, { ...domain.spaceContext(d.space_id), discussion: domain.discussi
       return frame(kind, `
 空间有一个目标。请把它拆成接下来要做的一批任务，调用 mcp__space__plan_tasks 一次。
 - 只拆近期（两周内）要开始的 2 到 6 个任务，后面的等这批完成后再拆。已有任务（existing_tasks）不要重复。
-- 每个任务写清楚标题、说明、2 到 4 条验收标准；负责人从 members 里按档案和分工选，执行者从 specialists 里选，没有合适的就传 null。
+- 每个任务写清楚标题、说明、2 到 4 条验收标准；负责人从 members 里按档案和分工选，执行者从 specialists 里选，没有明显对应的专项就交给「通用 agent」。
 - 有截止日期的目标，按倒推给每个任务一个 due（YYYY-MM-DD）。
 ${TOOL_RULE}`, { ...domain.spaceContext(s.id), existing_tasks: tasks, today: new Date().toISOString().slice(0, 10) })
     }

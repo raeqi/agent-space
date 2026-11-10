@@ -75,7 +75,14 @@ export interface Space {
   created_at: number
 }
 
+/** Every space has one general agent; any task without a better-suited specialist goes to it. */
+export const GENERAL_AGENT = {
+  name: '通用 agent',
+  specialty: '什么任务都能接：写文档、查资料和网页、跑命令、写和运行脚本、创建定时任务等。没有更合适的专项 agent 时由它执行',
+}
+
 export const DEFAULT_SPECIALISTS: Array<{ name: string; specialty: string }> = [
+  GENERAL_AGENT,
   { name: '文档 agent', specialty: '撰写方案、说明、FAQ、发布说明等文档，结论先行，结构清晰' },
   { name: '数据 agent', specialty: '整理数据、做分析报告和对比，给出可复现的口径和结论' },
   { name: '测试 agent', specialty: '设计测试用例、验收清单和风险检查，指出遗漏和边界情况' },
@@ -208,7 +215,7 @@ export class Domain {
       const title = spec.title.trim().slice(0, 80)
       if (!title || open.has(title)) continue
       if (!this.isMember(s.id, spec.owner_user_id)) throw new DomainError(`「${title}」的负责人必须是空间成员`)
-      let executor: Agent | null = null
+      let executor: Agent | null = this.generalAgent(s.id)
       if (spec.executor_agent_id) {
         executor = this.agent(spec.executor_agent_id)
         if (executor.kind !== 'specialist' || executor.space_id !== s.id) throw new DomainError(`「${title}」的执行者必须是本空间的专项 agent`)
@@ -217,11 +224,11 @@ export class Domain {
         id: newId('t'), space_id: s.id, raw_input: `按目标拆解：${title}`, title, description: spec.description?.trim() ?? '',
         acceptance: JSON.stringify((spec.acceptance ?? []).map((a) => a.trim()).filter(Boolean).slice(0, 10)),
         status: executor ? 'in_progress' : 'unclaimed', creator_id: s.owner_id, owner_id: spec.owner_user_id, executor_agent_id: executor?.id ?? null,
-        due: spec.due || null, merged_into: null, blocked_by_discussion: null, live: executor ? `${executor.name}准备开始` : '等待认领',
+        due: spec.due || null, merged_into: null, blocked_by_discussion: null, live: executor ? 'agent 准备开始' : '等待认领',
         source: 'plan', created_at: now(), updated_at: now(),
       }
       this.db.insert('tasks', t as unknown as Record<string, unknown>)
-      this.event(t.id, 'agent', agent.id, agent.name, `按目标「${s.goal_title}」拆出这个任务，负责人 ${this.user(spec.owner_user_id).name}${executor ? `，交给${executor.name}执行` : ''}`)
+      this.event(t.id, 'agent', agent.id, agent.name, `按目标「${s.goal_title}」拆出这个任务，负责人 ${this.user(spec.owner_user_id).name}${executor ? '，交给 agent 执行' : ''}`)
       if (executor) this.jobs.enqueue('execute', executor.id, { taskId: t.id })
       open.add(title)
       created.push(t)
@@ -341,6 +348,32 @@ export class Domain {
     return this.db.all<Agent>("SELECT * FROM agents WHERE space_id = ? ORDER BY kind = 'assistant' DESC, created_at", spaceId)
   }
 
+  /** The space's general agent, created on demand for spaces made before it existed. */
+  generalAgent(spaceId: string): Agent {
+    const found = this.db.get<Agent>("SELECT * FROM agents WHERE space_id = ? AND kind = 'specialist' AND name = ?", spaceId, GENERAL_AGENT.name)
+    if (found) return found
+    const id = newId('ag')
+    this.db.insert('agents', { id, kind: 'specialist', space_id: spaceId, name: GENERAL_AGENT.name, specialty: GENERAL_AGENT.specialty, token: newToken(), created_at: now() })
+    return this.agent(id)
+  }
+
+  /** Hand a task nobody picked up to the general agent so it does not stall. */
+  assignToGeneral(taskId: string, reason: string): Task {
+    const t = this.task(taskId)
+    const ex = this.generalAgent(t.space_id)
+    this.db.update('tasks', t.id, { executor_agent_id: ex.id, owner_id: t.owner_id ?? t.creator_id, status: 'in_progress', live: 'agent 准备开始', updated_at: now() })
+    this.event(t.id, 'system', null, '空间', reason)
+    this.jobs.enqueue('execute', ex.id, { taskId: t.id })
+    this.touch(t.space_id)
+    return this.task(t.id)
+  }
+
+  /** Startup: every space gets a general agent, and tasks left unclaimed by older versions are handed to it. */
+  ensureGeneralAgents(): void {
+    for (const s of this.db.all<{ id: string }>('SELECT id FROM spaces')) this.generalAgent(s.id)
+    for (const t of this.db.all<{ id: string }>("SELECT id FROM tasks WHERE status = 'unclaimed'")) this.assignToGeneral(t.id, '交给 agent 执行')
+  }
+
   assistantOf(spaceId: string): Agent {
     const a = this.db.get<Agent>("SELECT * FROM agents WHERE space_id = ? AND kind = 'assistant'", spaceId)
     if (!a) throw new DomainError('空间助理不存在', 500)
@@ -388,7 +421,7 @@ export class Domain {
       return this.task(t.id)
     }
     if (!this.isMember(t.space_id, input.owner_user_id)) throw new DomainError('负责人必须是空间成员')
-    let executor: Agent | null = null
+    let executor: Agent | null = this.generalAgent(t.space_id)
     if (input.executor_agent_id) {
       executor = this.agent(input.executor_agent_id)
       if (executor.kind !== 'specialist' || executor.space_id !== t.space_id) throw new DomainError('执行者必须是本空间的专项 agent')
@@ -397,23 +430,23 @@ export class Domain {
     this.db.update('tasks', t.id, {
       title: input.title.trim().slice(0, 80) || t.title, description: input.description?.trim() ?? '', acceptance,
       owner_id: input.owner_user_id, executor_agent_id: executor?.id ?? null, due: input.due || null,
-      status: executor ? 'in_progress' : 'unclaimed', live: executor ? `${executor.name}准备开始` : '等待认领', updated_at: now(),
+      status: executor ? 'in_progress' : 'unclaimed', live: executor ? 'agent 准备开始' : '等待认领', updated_at: now(),
     })
     const owner = this.user(input.owner_user_id)
-    this.event(t.id, 'agent', agent.id, agent.name, `整理完成：负责人 ${owner.name}${executor ? `，交给${executor.name}执行` : '，等待认领'}${input.note ? `。${input.note}` : ''}`)
+    this.event(t.id, 'agent', agent.id, agent.name, `整理完成：负责人 ${owner.name}${executor ? '，交给 agent 执行' : '，等待认领'}${input.note ? `。${input.note}` : ''}`)
     if (executor) this.jobs.enqueue('execute', executor.id, { taskId: t.id })
     this.touch(t.space_id)
     return this.task(t.id)
   }
 
-  claimTask(taskId: string, userId: string, executorAgentId: string): Task {
+  claimTask(taskId: string, userId: string, executorAgentId?: string): Task {
     const t = this.task(taskId)
     this.requireMember(t.space_id, userId)
     if (t.status !== 'unclaimed') throw new DomainError('只有待认领的任务可以认领')
-    const ex = this.agent(executorAgentId)
+    const ex = executorAgentId ? this.agent(executorAgentId) : this.generalAgent(t.space_id)
     if (ex.kind !== 'specialist' || ex.space_id !== t.space_id) throw new DomainError('请选择本空间的专项 agent')
-    this.db.update('tasks', t.id, { owner_id: userId, executor_agent_id: ex.id, status: 'in_progress', live: `${ex.name}准备开始`, updated_at: now() })
-    this.event(t.id, 'user', userId, this.user(userId).name, `认领任务，交给${ex.name}执行`)
+    this.db.update('tasks', t.id, { owner_id: userId, executor_agent_id: ex.id, status: 'in_progress', live: 'agent 准备开始', updated_at: now() })
+    this.event(t.id, 'user', userId, this.user(userId).name, '认领任务，交给 agent 执行')
     this.jobs.enqueue('execute', ex.id, { taskId: t.id })
     this.touch(t.space_id)
     return this.task(t.id)

@@ -103,6 +103,19 @@ test('task flow: organise, execute, suggest, reject with a standard, re-execute,
   assert.ok(items.length >= 2, 'personal agent actions appear in the work log')
 })
 
+test('a task without a matching specialist goes to the general agent instead of stalling', { timeout: 600_000 }, async () => {
+  const lin = new Client()
+  await lin.call('POST', '/api/login', { email: 'lin@example.com', name: '林夏' })
+  const { space } = await lin.call('POST', '/api/spaces', { name: '杂事' })
+  const { task } = await lin.call('POST', `/api/spaces/${space.id}/tasks`, { text: '建一个定时任务，每分钟说一次 hi' })
+  await app.jobs.idle(300_000)
+
+  const detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'review', 'executed and delivered, not left unclaimed')
+  assert.equal(detail.task.executor_name, '通用 agent')
+  assert.equal(detail.artifacts.length, 1)
+})
+
 test('discussion flow: agent opens, participants reply, escalates, owner decides, task resumes', { timeout: 600_000 }, async () => {
   const lin = new Client()
   await lin.call('POST', '/api/login', { email: 'lin@example.com', name: '林夏' })

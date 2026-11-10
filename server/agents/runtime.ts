@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 import type { Config } from '../config.ts'
@@ -26,7 +26,7 @@ function persona(agent: Agent): string {
     case 'assistant':
       return `你是「空间助理」，负责一个团队协作空间：整理和分配任务、组织 agent 讨论、在超出 agent 权限时把分歧交给人。你用 {{model}} 模型工作，说中文，简洁、准确，不编造事实。`
     case 'specialist':
-      return `你是空间里的「${agent.name}」，专长：${agent.specialty}。你用 {{model}} 模型工作，说中文。你的工作产物要遵守团队标准，结论先行，不编造数据。`
+      return `你是空间里的「${agent.name}」，专长：${agent.specialty}。你用 {{model}} 模型工作，说中文。你能用本地工具真正动手（命令、文件、网页、定时任务），不只写方案。你的工作产物要遵守团队标准，结论先行，不编造数据。`
     default:
       return `你是「${agent.name}」，代表你的主人参与团队空间：按主人的标准和判断给出建议和立场，但最终决定权在主人。你用 {{model}} 模型工作，说中文，简洁。`
   }
@@ -145,6 +145,34 @@ export class AgentRuntimePool {
     }
   }
 
+  /**
+   * dsh only delivers scheduled tasks while the agent's runtime is running, so the pool must not reap it.
+   * The SDK exposes no schedule RPC; read dsh's JSON store (<DSH_HOME>/storages/schedule.json) instead.
+   */
+  hasActiveSchedules(agentId: string): boolean {
+    try {
+      const store = JSON.parse(readFileSync(join(this.config.dataDir, 'agents', agentId, 'dsh-home', 'storages', 'schedule.json'), 'utf8')) as { tables?: { tasks?: Record<string, { status?: string }> } }
+      return Object.values(store.tables?.tasks ?? {}).some((t) => t.status === 'active')
+    } catch {
+      return false
+    }
+  }
+
+  /** Startup: bring up the runtimes of agents that still have active scheduled tasks. */
+  async resumeScheduled(agents: Agent[]): Promise<string[]> {
+    const resumed: string[] = []
+    for (const agent of agents) {
+      if (this.slots.has(agent.id) || !this.hasActiveSchedules(agent.id)) continue
+      try {
+        await this.slotFor(agent).harness.start()
+        resumed.push(agent.id)
+      } catch {
+        await this.close(agent.id)
+      }
+    }
+    return resumed
+  }
+
   async close(agentId: string): Promise<void> {
     const slot = this.slots.get(agentId)
     if (!slot) return
@@ -154,7 +182,7 @@ export class AgentRuntimePool {
 
   private async sweep(): Promise<void> {
     const cutoff = Date.now() - this.config.agentIdleMs
-    for (const [id, slot] of this.slots) if (!slot.busy && slot.lastUsed < cutoff) await this.close(id)
+    for (const [id, slot] of this.slots) if (!slot.busy && slot.lastUsed < cutoff && !this.hasActiveSchedules(id)) await this.close(id)
   }
 
   async closeAll(): Promise<void> {

@@ -49,20 +49,61 @@ export function when(ts: number): string {
 }
 
 /** Minimal, escaping Markdown renderer for agent-produced documents. */
+/**
+ * Execution agents are internal; members only see "agent". Older records still carry their names,
+ * so names of the space's specialist agents are rewritten for display.
+ */
+export function agentLabels(agents: Array<{ id: string; kind: string; name: string }> = []) {
+  const specialists = agents.filter((a) => a.kind === 'specialist')
+  const ids = new Set(specialists.map((a) => a.id))
+  const names = specialists.map((a) => a.name).sort((a, b) => b.length - a.length)
+  return {
+    name: (id: string | null | undefined, name: string) => (id && ids.has(id)) || names.includes(name) ? 'agent' : name,
+    text: (s: string | null | undefined) => names.reduce((acc, n) => acc.split(n).join(' agent '), s ?? '').replace(/\s+agent\s+/g, ' agent ').replace(/^ agent /, 'agent ').trim(),
+  }
+}
+
 export function Markdown({ text }: { text: string }) {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const inline = (s: string) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>')
+  const cells = (row: string) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+  const isTableSep = (s: string | undefined) => !!s && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(s)
   const out: string[] = []
-  let list = false
-  for (const line of text.split('\n')) {
-    const h = /^(#{1,3})\s+(.*)$/.exec(line)
-    const li = /^\s*[-*]\s+(.*)$/.exec(line)
-    if (!li && list) { out.push('</ul>'); list = false }
-    if (h) out.push(`<h${h[1]!.length}>${inline(h[2]!)}</h${h[1]!.length}>`)
-    else if (li) { if (!list) { out.push('<ul>'); list = true } out.push(`<li>${inline(li[1]!)}</li>`) }
+  let list: '' | 'ul' | 'ol' = ''
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = '' } }
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    // fenced code block
+    if (/^\s*```/.test(line)) {
+      closeList()
+      const code: string[] = []
+      while (++i < lines.length && !/^\s*```/.test(lines[i]!)) code.push(lines[i]!)
+      out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`)
+      continue
+    }
+    // table: header row followed by a separator row
+    if (line.trim().startsWith('|') && isTableSep(lines[i + 1])) {
+      closeList()
+      const head = cells(line)
+      const body: string[][] = []
+      i += 2
+      while (i < lines.length && lines[i]!.trim().startsWith('|')) body.push(cells(lines[i++]!))
+      i--
+      out.push(`<div class="table-wrap"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`)
+      continue
+    }
+    const h = /^(#{1,6})\s+(.*)$/.exec(line)
+    const ul = /^\s*[-*]\s+(.*)$/.exec(line)
+    const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line)
+    const kind = ul ? 'ul' : ol ? 'ol' : ''
+    if (kind !== list) closeList()
+    if (h) { const n = Math.min(h[1]!.length, 3); out.push(`<h${n}>${inline(h[2]!)}</h${n}>`) }
+    else if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) out.push('<hr>')
+    else if (kind) { if (!list) { out.push(`<${kind}>`); list = kind } out.push(`<li>${inline((ul ?? ol)![1]!)}</li>`) }
     else if (line.trim()) out.push(`<p>${inline(line)}</p>`)
   }
-  if (list) out.push('</ul>')
+  closeList()
   return <div dangerouslySetInnerHTML={{ __html: out.join('') }} />
 }
 
@@ -135,7 +176,7 @@ function ComposeDialog({ initialSpace, onClose }: { initialSpace?: string; onClo
           <label className="sr" htmlFor="compose">任务内容</label>
           <textarea id="compose" className="textarea" autoFocus placeholder="用一句话说要做什么，例如：上线前写一份客服 FAQ，失败原因和处理办法都要有" value={text} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit() }} />
-          <p className="small muted">发布后，空间助理会改写标题、写验收标准、选负责人和执行的专项 agent；和已有任务重复会自动合并。</p>
+          <p className="small muted">发布后，空间助理会改写标题、写验收标准、选负责人，然后交给 agent 执行；和已有任务重复会自动合并。</p>
           {error && <p className="error">{error}</p>}
           {data && data.spaces.length === 0 && <p className="error">你还没有空间，先新建一个。</p>}
         </div>

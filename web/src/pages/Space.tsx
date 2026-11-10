@@ -64,7 +64,7 @@ export function Overview() {
   const left = daysLeft(s.goal_due)
   const isOwner = s.owner_id === me.user.id
   const busyAgents = new Set(data.activeTasks.map((t: any) => t.agent_id))
-  const working = data.agents.filter((a: any) => a.activity && !busyAgents.has(a.id))
+  const working = data.agents.filter((a: any) => a.kind === 'assistant' && a.activity && !busyAgents.has(a.id))
   const personal = data.members.filter((m: any) => !m.left_at && m.agent_activity)
 
   return (
@@ -91,7 +91,7 @@ export function Overview() {
         )}
 
         <section className="row wrap" style={{ gap: 10 }}>
-          {[['待整理', c.triage], ['待认领', c.unclaimed], ['进行中', c.in_progress], ['待确认', c.review], ['完成', c.done]].map(([label, n]) => (
+          {[['待整理', c.triage], ['进行中', c.in_progress], ['待确认', c.review], ['完成', c.done]].map(([label, n]) => (
             <Link key={label} to={`/spaces/${s.id}/tasks`} className="card pad" style={{ flex: '1 1 110px', textDecoration: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span className="small muted">{label}</span><span style={{ fontSize: 22, fontWeight: 600 }}>{Number(n ?? 0)}</span>
             </Link>
@@ -121,7 +121,7 @@ export function Overview() {
           <div className="list">
             {data.activeTasks.map((t: any) => (
               <Link key={t.id} to={`/spaces/${s.id}/tasks/${t.id}`} className="stack" style={{ gap: 2, padding: '8px 0', textDecoration: 'none' }}>
-                <span className="sm">{t.agent_name}<span className="muted">，{t.title}</span></span><Live tone={t.blocked_by_discussion || /慢|晚/.test(t.live) ? 'warn' : undefined}>{t.live}</Live>
+                <span className="sm">{t.title}</span><Live tone={t.blocked_by_discussion || /慢|晚/.test(t.live) ? 'warn' : undefined}>{t.live}</Live>
               </Link>
             ))}
             {working.map((a: any) => <div key={a.id} className="stack" style={{ gap: 2, padding: '8px 0' }}><span className="sm">{a.name}</span><Live>{a.activity}</Live></div>)}
@@ -226,7 +226,7 @@ export function Members() {
         {isOwner && <HookCard spaceId={spaceId} />}
         <section className="card pad stack sm">
           <h3>空间 agent</h3>
-          {data.agents.map((a: any) => <span key={a.id} className="spread"><span>{a.name}</span>{a.activity ? <Live>{a.activity}</Live> : <span className="muted small">空闲</span>}</span>)}
+          {data.agents.filter((a: any) => a.kind === 'assistant').map((a: any) => <span key={a.id} className="spread"><span>{a.name}</span>{a.activity ? <Live>{a.activity}</Live> : <span className="muted small">空闲</span>}</span>)}
         </section>
       </aside>
     </div>

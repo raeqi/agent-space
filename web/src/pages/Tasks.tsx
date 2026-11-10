@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, spaceStream, useApi } from '../api.ts'
 import { JudgmentActions } from '../judgment.tsx'
-import { Avatar, Live, Markdown, STATUS, StatusTag, Tag, useMe, when } from '../ui.tsx'
+import { agentLabels, Avatar, Live, Markdown, STATUS, StatusTag, Tag, useMe, when } from '../ui.tsx'
 import { useSpace } from './Space.tsx'
 
 const ORDER = ['review', 'in_progress', 'unclaimed', 'triage', 'done']
@@ -41,6 +41,7 @@ export function Tasks({ flow = false }: { flow?: boolean }) {
 }
 
 function ListView({ tasks, spaceId, selected }: { tasks: any[]; spaceId: string; selected?: string }) {
+  const L = agentLabels(useSpace()?.data?.agents)
   if (tasks.length === 0) return null
   return (
     <div className="card" style={{ overflow: 'hidden' }}>
@@ -53,9 +54,8 @@ function ListView({ tasks, spaceId, selected }: { tasks: any[]; spaceId: string;
             <div className="list">
               {rows.map((t) => (
                 <Link key={t.id} to={`/spaces/${spaceId}/tasks/${t.id}`} className={`rowlink${t.id === selected ? ' sel' : ''}`}>
-                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}><span>{t.title}{sourceLabel(t.source) && <span className="small muted" style={{ marginLeft: 8 }}>{sourceLabel(t.source)}</span>}</span>{t.status !== 'done' && <Live tone={liveTone(t)}>{t.live}</Live>}</span>
+                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}><span>{t.title}{sourceLabel(t.source) && <span className="small muted" style={{ marginLeft: 8 }}>{sourceLabel(t.source)}</span>}</span>{t.status !== 'done' && <Live tone={liveTone(t)}>{L.text(t.live)}</Live>}</span>
                   {t.owner_id ? <span title={t.owner_name}><Avatar name={t.owner_name} id={t.owner_id} /></span> : <span style={{ width: 22 }} />}
-                  <span className="small muted" style={{ width: 80 }}>{t.executor_name ?? '—'}</span>
                   <span style={{ width: 72, display: 'flex', justifyContent: 'flex-end' }}><StatusTag status={t.status} blocked={!!t.blocked_by_discussion} /></span>
                 </Link>
               ))}
@@ -68,7 +68,8 @@ function ListView({ tasks, spaceId, selected }: { tasks: any[]; spaceId: string;
 }
 
 function FlowView({ tasks, spaceId }: { tasks: any[]; spaceId: string }) {
-  const cols = ['triage', 'unclaimed', 'in_progress', 'review', 'done']
+  const L = agentLabels(useSpace()?.data?.agents)
+  const cols = ['triage', 'in_progress', 'review', 'done']
   return (
     <div className="flow">
       {cols.map((status) => (
@@ -77,8 +78,8 @@ function FlowView({ tasks, spaceId }: { tasks: any[]; spaceId: string }) {
           {tasks.filter((t) => t.status === status).map((t) => (
             <Link key={t.id} to={`/spaces/${spaceId}/tasks/${t.id}`} className="fcard">
               <span style={{ fontWeight: 500 }}>{t.title}</span>
-              {status !== 'done' && <Live tone={liveTone(t)}>{t.live}</Live>}
-              <span className="row small muted">{t.owner_id && <Avatar name={t.owner_name} id={t.owner_id} size={18} />}{t.executor_name ?? '未分配'}</span>
+              {status !== 'done' && <Live tone={liveTone(t)}>{L.text(t.live)}</Live>}
+              {t.owner_id && <span className="row small muted"><Avatar name={t.owner_name} id={t.owner_id} size={18} />{t.owner_name}</span>}
             </Link>
           ))}
         </div>
@@ -92,21 +93,20 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
   const { data, reload } = useApi(`/api/tasks/${taskId}`, [spaceStream(spaceId)])
   const { data: space } = useSpace()
   const { me } = useMe()
-  const [executor, setExecutor] = useState('')
   const [showHistory, setShowHistory] = useState(false)
   if (!data) return <aside className="panel" />
   const t = data.task
   const latest = data.artifacts[0]
-  const specialists = space.agents.filter((a: any) => a.kind === 'specialist')
-  const claim = async () => { await api('POST', `/api/tasks/${t.id}/claim`, { executorAgentId: executor || specialists[0]?.id }); reload() }
+  const claim = async () => { await api('POST', `/api/tasks/${t.id}/claim`, {}); reload() }
+  const L = agentLabels(space?.agents)
 
   return (
     <aside className="panel" aria-label="任务详情">
       <div className="spread"><StatusTag status={t.status} blocked={!!t.blocked_by_discussion} /><button className="btn ghost" aria-label="关闭" onClick={() => navigate(`/spaces/${spaceId}/tasks`)}>✕</button></div>
       <div className="stack" style={{ gap: 4 }}>
         <h2>{t.title}</h2>
-        {(t.owner_name || t.executor_name || sourceLabel(t.source)) && <span className="sm muted">{[sourceLabel(t.source), t.owner_name && `负责人 ${t.owner_name}`, t.executor_name && `执行 ${t.executor_name}`, t.due && `截止 ${t.due}`].filter(Boolean).join('，')}</span>}
-        {t.status !== 'done' && t.live && <Live tone={liveTone(t)}>{t.live}</Live>}
+        {(t.owner_name || t.due || sourceLabel(t.source)) && <span className="sm muted">{[sourceLabel(t.source), t.owner_name && `负责人 ${t.owner_name}`, t.due && `截止 ${t.due}`].filter(Boolean).join('，')}</span>}
+        {t.status !== 'done' && t.live && <Live tone={liveTone(t)}>{L.text(t.live)}</Live>}
       </div>
       {t.merged_into && <Link to={`/spaces/${spaceId}/tasks/${t.merged_into}`} className="sm">查看合并后的任务</Link>}
       {t.raw_input !== t.title && <p className="sm sub">{t.raw_input}</p>}
@@ -120,10 +120,7 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
         </div>
       )}
       {t.status === 'unclaimed' && (
-        <div className="row">
-          <select className="select" aria-label="执行 agent" value={executor} onChange={(e) => setExecutor(e.target.value)}>{specialists.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-          <button className="btn primary" onClick={() => void claim()}>认领</button>
-        </div>
+        <div className="row"><button className="btn primary" onClick={() => void claim()}>由我负责，交给 agent 执行</button></div>
       )}
       {latest && (
         <div className="stack" style={{ gap: 6 }}>
@@ -137,21 +134,26 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
           {d.outcome && <span className="small muted">{d.outcome}</span>}
         </Link>
       ))}
-      {data.events.length > 0 && (
-        <div className="stack" style={{ gap: 6 }}>
-          <button className="btn small history-toggle" aria-expanded={showHistory} title="谁在这个任务上做了什么，按时间排列" onClick={() => setShowHistory(!showHistory)}>
-            <span aria-hidden="true">{showHistory ? '▾' : '▸'}</span>
-            {showHistory ? '收起处理过程' : `处理过程（${data.events.length} 条）`}
-          </button>
-          {showHistory && (
+      {data.events.length > 0 && (() => {
+        const RECENT = 3
+        const hidden = Math.max(0, data.events.length - RECENT)
+        const shown = showHistory ? data.events : data.events.slice(-RECENT)
+        return (
+          <section className="stack" style={{ gap: 6 }} aria-label="处理记录">
+            <span className="spread"><b className="sm" style={{ fontWeight: 600 }}>处理记录</b><span className="small muted">谁在什么时候做了什么</span></span>
+            {hidden > 0 && (
+              <button className="btn ghost small history-toggle" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>
+                {showHistory ? '只看最近 3 条' : `显示更早的 ${hidden} 条`}
+              </button>
+            )}
             <ol className="history">
-              {data.events.map((e: any) => (
-                <li key={e.id} className="sm"><span className="muted small">{when(e.created_at)}</span> <b>{e.actor_name}</b>：{e.text}</li>
+              {shown.map((e: any) => (
+                <li key={e.id} className="sm"><span className="muted small">{when(e.created_at)}</span> <b>{L.name(e.actor_id, e.actor_name)}</b>：{L.text(e.text)}</li>
               ))}
             </ol>
-          )}
-        </div>
-      )}
+          </section>
+        )
+      })()}
       {data.judgment && (
         <div style={{ marginTop: 'auto', borderTop: '1px solid var(--line2)', paddingTop: 14 }} className="stack">
           {data.judgment.suggestion && <span className="sm">{data.judgment.user_id === me.user.id ? '你的 agent ' : `${t.owner_name}的 agent `}建议{data.judgment.suggestion}</span>}

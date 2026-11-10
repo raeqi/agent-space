@@ -27,6 +27,7 @@ export async function createApp(config: Config, options: { logger?: boolean } = 
   const jobs = new JobRunner(db, pool)
   const domain = new Domain(db, bus, jobs)
   jobs.attach(domain)
+  domain.ensureGeneralAgents()
 
   const server = Fastify({ logger: options.logger ?? true, bodyLimit: 2 * 1024 * 1024 })
   await server.register(cookie, { secret: config.cookieSecret })
@@ -42,9 +43,10 @@ export async function createApp(config: Config, options: { logger?: boolean } = 
   registerApi(server, config, domain, pool)
 
   if (existsSync(join(config.webDist, 'index.html'))) {
-    await server.register(fastifyStatic, { root: config.webDist, wildcard: false })
+    // wildcard: true looks files up per request, so a rebuilt web/ is served without restarting.
+    await server.register(fastifyStatic, { root: config.webDist, wildcard: true })
     server.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api/') || req.url.startsWith('/mcp')) return reply.status(404).send({ error: 'not found' })
+      if (req.url.startsWith('/api/') || req.url.startsWith('/mcp') || req.url.startsWith('/assets/')) return reply.status(404).send({ error: 'not found' })
       return reply.sendFile('index.html')
     })
   }

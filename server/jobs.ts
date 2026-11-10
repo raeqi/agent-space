@@ -179,9 +179,7 @@ export class JobRunner implements JobSink {
       case 'triage': {
         const t = d.task(String(p.taskId))
         if (t.status !== 'triage') return
-        d.db.update('tasks', t.id, { status: 'unclaimed', owner_id: t.creator_id, live: '空间助理没能整理，请人工认领', updated_at: now() })
-        d.event(t.id, 'system', null, '空间', `空间助理整理失败，已转为待认领。原因：${short}`)
-        d.touch(t.space_id)
+        d.assignToGeneral(t.id, `空间助理整理失败，按原始描述交给 agent 执行。原因：${short}`)
         return
       }
       case 'execute': {

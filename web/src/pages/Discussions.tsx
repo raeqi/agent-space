@@ -1,7 +1,8 @@
 import { Link, useParams } from 'react-router-dom'
 import { spaceStream, useApi } from '../api.ts'
 import { JudgmentActions } from '../judgment.tsx'
-import { Avatar, Tag, useMe, when } from '../ui.tsx'
+import { agentLabels, Avatar, Tag, useMe, when } from '../ui.tsx'
+import { useSpace } from './Space.tsx'
 
 const TONE: Record<string, { label: string; tone?: 'amber' | 'green' }> = {
   open: { label: '进行中' },
@@ -14,6 +15,7 @@ export function Discussions() {
   const { data } = useApi<{ discussions: any[] }>(`/api/spaces/${spaceId}/discussions`, [spaceStream(spaceId!)])
   const list = data?.discussions ?? []
   const current = discussionId ?? list[0]?.id
+  const L = agentLabels(useSpace()?.data?.agents)
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       <aside style={{ flex: '0 0 290px', borderRight: '1px solid var(--line)', padding: '14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -21,7 +23,7 @@ export function Discussions() {
         {list.map((d) => (
           <Link key={d.id} to={`/spaces/${spaceId}/discussions/${d.id}`} style={{ textDecoration: 'none', display: 'flex', flexDirection: 'column', gap: 2, padding: '9px 10px', borderRadius: 8, ...(d.id === current ? { background: '#fff', boxShadow: '0 0 0 1px var(--line)' } : {}) }}>
             <span className="spread"><span className="sm">{d.title}</span><Tag tone={TONE[d.status]?.tone}>{TONE[d.status]?.label}</Tag></span>
-            <span className="small muted">{d.opened_by ?? ''}{d.task_title ? `，来自「${d.task_title}」` : ''}</span>
+            <span className="small muted">{L.name(null, d.opened_by ?? '')}{d.task_title ? `，来自「${d.task_title}」` : ''}</span>
           </Link>
         ))}
       </aside>
@@ -33,6 +35,7 @@ export function Discussions() {
 function Thread({ id, spaceId }: { id: string; spaceId: string }) {
   const { data, reload } = useApi(`/api/discussions/${id}`, [spaceStream(spaceId)])
   const { me } = useMe()
+  const L = agentLabels(useSpace()?.data?.agents)
   if (!data) return <main style={{ flex: 1 }} />
   const d = data.discussion
   return (
@@ -45,10 +48,10 @@ function Thread({ id, spaceId }: { id: string; spaceId: string }) {
         {data.messages.map((m: any) => {
           const conclusion = m.text.startsWith('结论：') || m.text.startsWith('总结：')
           return conclusion ? (
-            <div key={m.id} className="bubble-summary stack" style={{ gap: 2 }}><span className="small muted">{m.author_name}，{when(m.created_at)}</span><span>{m.text}</span></div>
+            <div key={m.id} className="bubble-summary stack" style={{ gap: 2 }}><span className="small muted">{L.name(m.author_id, m.author_name)}，{when(m.created_at)}</span><span>{L.text(m.text)}</span></div>
           ) : (
-            <div key={m.id} className="msg"><Avatar name={m.author_name} id={m.author_id ?? m.author_name} size={26} agent={m.author_kind === 'agent' && !m.author_name.endsWith('的 agent')} />
-              <span className="stack" style={{ gap: 2 }}><span className="small muted">{m.author_name}，{when(m.created_at)}</span><span>{m.text}</span></span></div>
+            <div key={m.id} className="msg"><Avatar name={L.name(m.author_id, m.author_name)} id={m.author_id ?? m.author_name} size={26} agent={m.author_kind === 'agent' && !m.author_name.endsWith('的 agent')} />
+              <span className="stack" style={{ gap: 2 }}><span className="small muted">{L.name(m.author_id, m.author_name)}，{when(m.created_at)}</span><span>{L.text(m.text)}</span></span></div>
           )
         })}
         {data.judgment && (

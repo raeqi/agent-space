@@ -38,7 +38,7 @@ export function NewSpace() {
       <form className="col" style={{ maxWidth: 640 }} onSubmit={submit}>
         <header className="spread">
           <h1>新建空间</h1>
-          <div className="seg"><button type="button" className="on">从零开始</button><button type="button" disabled title="即将支持">从工作群导入</button></div>
+          <div className="seg"><button type="button" className="on">从零开始</button><button type="button" disabled title="从工作群导入空间和资料还在开发中">从工作群导入<span className="soon">即将支持</span></button></div>
         </header>
         <div className="field"><label className="label" htmlFor="sname">名称</label><input id="sname" className="input" required value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div className="field">
