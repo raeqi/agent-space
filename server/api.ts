@@ -322,6 +322,14 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
     return { files: db.all('SELECT f.id, f.name, f.source, f.reads, f.created_at, length(f.content) AS size, u.name AS added_by_name FROM files f LEFT JOIN users u ON u.id = f.added_by WHERE f.space_id = ? ORDER BY f.created_at DESC', id) }
   })
 
+  app.get('/api/spaces/:id/files/:fileId/download', { preHandler: auth }, async (req, reply) => {
+    const id = space(req)
+    const { fileId } = req.params as { fileId: string }
+    const file = db.get<{ name: string; content: string }>('SELECT name, content FROM files WHERE id = ? AND space_id = ?', fileId, id)
+    if (!file) return reply.code(404).send({ error: '文件不存在' })
+    return reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`).type('text/plain; charset=utf-8').send(file.content)
+  })
+
   app.post('/api/spaces/:id/files', { preHandler: auth, bodyLimit: 1_048_576 }, async (req) => {
     const id = space(req)
     const b = (req.body ?? {}) as Body

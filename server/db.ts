@@ -212,6 +212,9 @@ export class Db {
     this.sql.exec(SCHEMA)
     this.ensureColumn('tasks', 'source', "TEXT NOT NULL DEFAULT 'manual'")
     this.ensureColumn('spaces', 'webhook_token', 'TEXT')
+    // JSON { expected, seen, endsAt, scheduleId } while a task waits for its scheduled runs before delivery.
+    this.ensureColumn('tasks', 'schedule_wait', 'TEXT')
+    this.ensureColumn('tasks', 'schedule_result', 'TEXT')
   }
 
   /** Additive migration for databases created by earlier versions. */

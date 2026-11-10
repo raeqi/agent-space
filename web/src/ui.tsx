@@ -13,7 +13,7 @@ export function colorFor(id: string): string {
 export function Avatar({ name, id, size = 22, agent = false }: { name: string; id: string; size?: number; agent?: boolean }) {
   // People and their personal agents share a colour, keyed by the person's name.
   const person = (name || id).replace(/的 agent$/, '')
-  return <span className={`av${agent ? ' agent' : ''}`} style={{ width: size, height: size, background: agent ? '#52525B' : colorFor(person), fontSize: Math.max(10, size / 2 - 1) }} aria-hidden>{(person || '?').slice(0, 1)}</span>
+  return <span className={`av${agent ? ' agent' : ''}`} style={{ width: size, height: size, background: colorFor(person), fontSize: Math.max(10, size / 2 - 1) }} aria-hidden>{(person || '?').slice(0, 1)}</span>
 }
 
 export function Tag({ children, tone }: { children: ReactNode; tone?: 'amber' | 'green' | 'indigo' }) {
@@ -58,6 +58,8 @@ export function agentLabels(agents: Array<{ id: string; kind: string; name: stri
   const ids = new Set(specialists.map((a) => a.id))
   const names = specialists.map((a) => a.name).sort((a, b) => b.length - a.length)
   return {
+    /** True for an internal execution agent. */
+    internal: (id: string | null | undefined) => !!id && ids.has(id),
     name: (id: string | null | undefined, name: string) => (id && ids.has(id)) || names.includes(name) ? 'agent' : name,
     text: (s: string | null | undefined) => names.reduce((acc, n) => acc.split(n).join(' agent '), s ?? '').replace(/\s+agent\s+/g, ' agent ').replace(/^ agent /, 'agent ').trim(),
   }
@@ -219,13 +221,14 @@ export function Nav() {
 
 export function SpaceHeader({ space, tab, members }: { space: any; tab: string; members: any[] }) {
   const compose = useCompose()
+  const { me } = useMe()
   const tabs = [['概览', ''], ['任务', '/tasks'], ['讨论', '/discussions'], ['资产', '/assets'], ['成员', '/members']]
   const active = members.filter((m) => !m.left_at)
   return (
     <header className="shead">
       <div className="shead-top">
         <span className="row" style={{ gap: 10 }}><b style={{ fontSize: 15, fontWeight: 600 }}>{space.name}</b>
-          {space.goal_title ? <span className="chip">目标 {space.goal_due || '未定日期'}</span> : <Link to={`/spaces/${space.id}`} className="small muted">没有设定目标</Link>}
+          {space.goal_title ? <span className="chip">目标 {space.goal_due || '未定日期'}</span> : <Link to={`/spaces/${space.id}?goal=edit`} className="small muted">{space.owner_id === me.user.id ? "+ 添加目标" : "未设目标 · 查看"}</Link>}
         </span>
         <span className="row" style={{ gap: 12 }}>
           <span className="row" style={{ gap: 0 }}>{active.slice(0, 6).map((m, i) => <span key={m.id} style={{ marginLeft: i ? -6 : 0, border: '2px solid #fff', borderRadius: '50%', display: 'inline-flex' }} title={m.name}><Avatar name={m.name} id={m.id} size={24} /></span>)}</span>
@@ -244,4 +247,11 @@ export function AssetNav({ spaceId, active }: { spaceId: string; active: string 
 
 export function logout(): void {
   void api('POST', '/api/logout').then(() => window.location.assign('/'))
+}
+
+export function CompactText({ text, limit = 100 }: { text: string; limit?: number }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!text) return null
+  const long = text.length > limit
+  return <span className="compact-text"><span>{long && !expanded ? `${text.slice(0, limit)}…` : text}</span>{long && <button className="text-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '展开'}</button>}</span>
 }

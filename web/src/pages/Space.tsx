@@ -1,7 +1,8 @@
+import { CompactText } from '../ui.tsx'
 import { useState } from 'react'
-import { Link, Outlet, useLocation, useOutletContext, useParams } from 'react-router-dom'
+import { Link, Outlet, useLocation, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { api, spaceStream, useApi } from '../api.ts'
-import { Avatar, Live, Nav, SpaceHeader, Tag, useMe, when } from '../ui.tsx'
+import { Avatar, Live, Nav, SpaceHeader, Tag, useCompose, useMe, when } from '../ui.tsx'
 
 export interface SpaceCtx { data: any; reload: () => void; spaceId: string }
 export const useSpace = () => useOutletContext<SpaceCtx>()
@@ -56,7 +57,12 @@ function GoalEditor({ space, onDone }: { space: any; onDone: () => void }) {
 export function Overview() {
   const { data, reload } = useSpace()
   const { me } = useMe()
-  const [editing, setEditing] = useState(false)
+  const [goalParams, setGoalParams] = useSearchParams()
+  const editing = goalParams.get("goal") === "edit" && data.space.owner_id === me.user.id
+  const setEditing = (value: boolean) => setGoalParams((previous) => { const next = new URLSearchParams(previous); if (value) next.set("goal", "edit"); else next.delete("goal"); return next })
+  const compose = useCompose()
+  const { data: taskData } = useApi<{ tasks: any[] }>(`/api/spaces/${data.space.id}/tasks`, [spaceStream(data.space.id)])
+  const tasks = (taskData?.tasks ?? []).filter((t: any) => t.status !== 'merged')
   const s = data.space
   const c = data.counts ?? {}
   const total = Number(c.total ?? 0)
@@ -68,10 +74,11 @@ export function Overview() {
   const personal = data.members.filter((m: any) => !m.left_at && m.agent_activity)
 
   return (
-    <div className="page tight">
+    <div className="page tight workspace-overview">
       <div className="col">
+        <div className="workspace-intro"><div><span className="eyebrow">协作空间</span><h1>{s.name}</h1><p>{data.members.filter((m: any) => !m.left_at).length} 位成员和他们的 agent · {data.openDiscussions.length} 项讨论正在协调</p></div><Link className="btn" to={`/spaces/${s.id}/members`}>邀请成员 ↗</Link></div>
         {editing ? <GoalEditor space={s} onDone={() => { setEditing(false); reload() }} /> : s.goal_title ? (
-          <section className="card pad stack" style={{ gap: 12 }}>
+          <section className="card pad stack goal-card" style={{ gap: 12 }}>
             <div className="spread">
               <span className="stack" style={{ gap: 2 }}><h2>{s.goal_title}</h2><span className="sm muted">{s.goal_due ? `${s.goal_due}${left !== null ? (left >= 0 ? `，还有 ${left} 天` : `，已过 ${-left} 天`) : ''}` : '未定日期'}</span></span>
               {isOwner && <span className="row"><button className="btn ghost" disabled={data.planning} onClick={() => void api('POST', `/api/spaces/${s.id}/plan`).then(reload)}>再拆一批</button><button className="btn ghost" onClick={() => setEditing(true)}>修改</button></span>}
@@ -85,28 +92,42 @@ export function Overview() {
           </section>
         ) : (
           <section className="card pad spread">
-            <span className="sm muted">没有设定目标</span>
-            {isOwner && <button className="btn" onClick={() => setEditing(true)}>设定目标</button>}
+            <span className="sm muted">常设协作空间 · 也可以添加阶段目标</span>
+            {isOwner ? <button className="btn" onClick={() => setEditing(true)}>添加目标</button> : <span className="small muted">由空间负责人 {data.members.find((m: any) => m.id === s.owner_id)?.name ?? "owner"} 设置</span>}
           </section>
         )}
 
-        <section className="row wrap" style={{ gap: 10 }}>
-          {[['待整理', c.triage], ['进行中', c.in_progress], ['待确认', c.review], ['完成', c.done]].map(([label, n]) => (
-            <Link key={label} to={`/spaces/${s.id}/tasks`} className="card pad" style={{ flex: '1 1 110px', textDecoration: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span className="small muted">{label}</span><span style={{ fontSize: 22, fontWeight: 600 }}>{Number(n ?? 0)}</span>
-            </Link>
-          ))}
+        <section className="workspace-entry">
+          <div className="entry-icon">＋</div><div><h3>把新的事情带进空间</h3><p>直接说要做什么，空间助理会整理需求、协调分工。</p></div><button className="btn primary" onClick={() => compose(s.id)}>提出任务 ↗</button>
+        </section>
+        <section className="work-section">
+          <div className="section-label"><span>空间里的事</span><Link to={`/spaces/${s.id}/tasks`} className="small muted">全部任务 ↗</Link></div>
+          <div className="work-stages">{['整理与分工', 'agent 执行', '个人 agent 预审', '负责人确认'].map((label, i) => <span key={label}><b>{i + 1}</b>{label}{i < 3 && <i>→</i>}</span>)}</div>
+          {!taskData && <div className="card empty">正在读取任务…</div>}
+          {taskData && tasks.length === 0 && <div className="card empty">还没有任务。提出第一件事，空间助理会整理需求并安排执行。</div>}
+          <div className="work-items">{[...tasks].sort((a: any, b: any) => (['review','in_progress','unclaimed','triage','done'].indexOf(a.status) - ['review','in_progress','unclaimed','triage','done'].indexOf(b.status))).slice(0, 8).map((t: any) => {
+            const stage = t.status === 'done' ? 4 : t.status === 'review' ? 3 : t.status === 'in_progress' ? 1 : 0
+            const waiting = data.waiting.find((j: any) => j.ref_id === t.id)
+            return <Link className={`work-item stage-${stage}`} key={t.id} to={`/spaces/${s.id}/tasks/${t.id}`}><div className="work-item-top"><Tag tone={t.blocked_by_discussion ? 'amber' : stage === 4 ? 'green' : stage === 3 ? 'amber' : 'indigo'}>{t.blocked_by_discussion ? '讨论中' : ['整理与分工','执行中','','待确认','已完成'][stage]}</Tag><span className="small muted">{when(t.updated_at)}</span></div><h3>{t.title}</h3><div className="work-ownership"><span>负责人 <b>{t.owner_name || '待分配'}</b></span><span>执行 <b>{t.executor_name || '空间助理正在安排'}</b></span></div><p className="work-next">{t.blocked_by_discussion ? `需要先解决：${t.blocked_title || '执行中的分歧'}` : stage === 3 ? `等待${waiting?.user_name || t.owner_name || '负责人'}确认交付，查看产物和个人 agent 的建议 →` : stage === 4 ? '负责人已确认，查看交付结果 →' : t.live || '空间助理正在补全需求和验收标准'}</p></Link>
+          })}</div>
+        </section>
+        <section>
+          <div className="section-label"><span>正在协调 <span className="count-pill">{data.openDiscussions.length}</span></span><Link to={`/spaces/${s.id}/discussions`} className="small muted">查看讨论 ↗</Link></div>
+          <div className="coordination-grid">{data.openDiscussions.map((d: any) => <Link className="coordination-card" key={d.id} to={`/spaces/${s.id}/discussions/${d.id}`}><span className="coordination-symbol">↔</span><Tag tone={d.status === 'escalated' ? 'amber' : 'indigo'}>{d.status === 'escalated' ? '需要人来定夺' : 'agent 正在协商'}</Tag><h3>{d.title}</h3><span className="small muted">查看各方意见与讨论进展 →</span></Link>)}{data.openDiscussions.length === 0 && <div className="card empty">目前没有待协调的分歧。新的讨论会出现在这里。</div>}</div>
         </section>
 
+
         <section>
-          <div className="section-label"><span>最近</span><Link to={`/spaces/${s.id}/assets/memory`} className="small muted">全部记忆</Link></div>
+          <div className="section-label"><span>共享动态</span><Link to={`/spaces/${s.id}/assets/memory`} className="small muted">全部记忆</Link></div>
           <div className="card list">
-            {data.recentMemory.map((m: any, i: number) => <div key={i} className="grid-row" style={{ gridTemplateColumns: '84px minmax(0,1fr)' }}><span className="small muted">{when(m.created_at)}</span><span className="sm">{m.text}</span></div>)}
+            {data.recentMemory.length === 0 && <div className="empty">讨论结论、团队标准和成员变化会留在这里，成为共同的上下文。</div>}
+            {data.recentMemory.map((m: any, i: number) => <div key={i} className="grid-row" style={{ gridTemplateColumns: '84px minmax(0,1fr)' }}><span className="small muted">{when(m.created_at)}</span><span className="sm">{<CompactText text={m.text} />}</span></div>)}
           </div>
         </section>
       </div>
 
-      <aside className="aside">
+      <aside className="aside workspace-people">
+        <section className="people-card"><div className="section-label"><span>成员和他们的 agent</span><Link to={`/spaces/${s.id}/members`} className="small muted">管理 ↗</Link></div><p className="small muted">个人 agent 代表主人参与讨论、预审交付。</p><div className="people-list">{data.members.filter((m: any) => !m.left_at).map((m: any) => <div className="person-pair" key={m.id}><div className="row"><Avatar name={m.name} id={m.id} size={34}/><div className="stack" style={{gap: 1}}><b>{m.name}</b><span className="small muted">{m.title || '空间成员'}</span></div>{m.id === me.user.id && <span className="self-label">你</span>}</div><div className="personal-agent"><span className="agent-spark">✧</span><div><span className="sm">{m.name}的 agent</span><div className="small muted">{m.agent_activity || '暂无进行中的活动'}</div></div></div></div>)}</div><div className="space-agent-block"><span className="eyebrow">空间协作</span>{data.agents.filter((a: any) => a.kind === 'assistant').map((a: any) => <div className="row" key={a.id}><span className="assistant-mark">✳</span><div><b className="sm">{a.name}</b><p className="small muted">{a.activity || '协调分工，让共同目标持续推进'}</p></div></div>)}</div></section>
         <section className="card pad">
           <div className="section-label"><span>等人判断</span><span>{data.waiting.length}</span></div>
           {data.waiting.length === 0 && <p className="sm muted">暂无</p>}

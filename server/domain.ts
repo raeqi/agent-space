@@ -59,9 +59,14 @@ export interface Task {
   blocked_by_discussion: string | null
   live: string
   source: string
+  /** JSON ScheduleWait while the task waits for its scheduled runs before delivery. */
+  schedule_result?: string | null
+  schedule_wait?: string | null
   created_at: number
   updated_at: number
 }
+
+export interface ScheduleWait { expected: number; seen: number; endsAt: number; scheduleId: string }
 
 export interface Space {
   id: string
@@ -455,9 +460,69 @@ export class Domain {
   postProgress(agent: Agent, taskId: string, text: string): void {
     const t = this.task(taskId)
     this.requireAgentInSpace(agent, t.space_id)
-    this.db.update('tasks', t.id, { live: text.slice(0, 120), updated_at: now() })
+    // Progress goes to the task history only; the status line (live) stays a short, state-based summary.
+    this.db.update('tasks', t.id, { updated_at: now() })
     this.event(t.id, 'agent', agent.id, agent.name, text.slice(0, 500))
     this.touch(t.space_id)
+  }
+
+  scheduleWait(t: Task): ScheduleWait | null {
+    return t.schedule_wait ? parseJson<ScheduleWait | null>(t.schedule_wait, null) : null
+  }
+
+  /**
+   * The executor created a finite scheduled task whose runs the acceptance depends on: hold delivery until
+   * the runs have reported back (or the expected end time has passed), then wake the executor to deliver.
+   */
+  waitForScheduledRuns(agent: Agent, input: { task_id: string; schedule_id: string; expected_runs: number; ends_at: string }): void {
+    const t = this.task(input.task_id)
+    if (t.executor_agent_id !== agent.id) throw new DomainError('只有这个任务的执行 agent 可以设置等待')
+    if (t.status !== 'in_progress') throw new DomainError('任务不在执行中')
+    const expected = Math.floor(input.expected_runs)
+    if (!(expected >= 1 && expected <= 100)) throw new DomainError('expected_runs 要在 1 到 100 之间；不限次数的定时任务不需要等，直接提交产物')
+    const endsAt = Date.parse(input.ends_at)
+    if (Number.isNaN(endsAt)) throw new DomainError('ends_at 要是带时区的 ISO 时间，例如 2026-11-10T14:12:00+08:00')
+    if (endsAt < Date.now() - 60_000) throw new DomainError('ends_at 已经过去了')
+    if (endsAt > Date.now() + 7 * 86_400_000) throw new DomainError('最后一次执行超过 7 天后的，不需要等，直接提交产物并写清楚时间安排')
+    const wait: ScheduleWait = { expected, seen: 0, endsAt, scheduleId: input.schedule_id }
+    this.db.update('tasks', t.id, { schedule_result: null, schedule_wait: JSON.stringify(wait), live: `等定时任务跑完（0/${expected}）`, updated_at: now() })
+    const end = new Date(endsAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+    this.event(t.id, 'agent', agent.id, agent.name, `创建定时任务，共执行 ${expected} 次，预计 ${end} 结束；跑完后再交付`)
+    this.touch(t.space_id)
+  }
+
+  /** Called by each scheduled run: records the run on the task and, after the last one, wakes the executor to deliver. */
+  reportScheduledRun(agent: Agent, input: { task_id: string; text: string }): void {
+    const t = this.task(input.task_id)
+    if (t.executor_agent_id !== agent.id) throw new DomainError('只有这个任务的执行 agent 可以记录定时执行结果')
+    const wait = this.scheduleWait(t)
+    const n = wait ? wait.seen + 1 : this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM task_events WHERE task_id = ? AND text LIKE '第 % 次执行：%'", t.id)!.n + 1
+    this.event(t.id, 'agent', agent.id, agent.name, `第 ${n} 次执行：${input.text.trim().slice(0, 400)}`)
+    if (wait) {
+      const next = { ...wait, seen: n }
+      this.db.update('tasks', t.id, { schedule_wait: JSON.stringify(next), live: `等定时任务跑完（${Math.min(n, wait.expected)}/${wait.expected}）`, updated_at: now() })
+      if (n >= wait.expected) this.finishScheduleWait(t.id, `定时任务 ${wait.expected} 次已全部执行`)
+    }
+    this.touch(t.space_id)
+  }
+
+  /** Stop waiting and ask the executor to deliver against the recorded runs. */
+  finishScheduleWait(taskId: string, reason: string): void {
+    const t = this.task(taskId)
+    const wait = this.scheduleWait(t)
+    if (!wait || !t.executor_agent_id) return
+    this.db.update('tasks', t.id, { schedule_result: JSON.stringify(wait), schedule_wait: null, live: 'agent 在整理执行结果', updated_at: now() })
+    this.event(t.id, 'system', null, '空间', `${reason}，交给 agent 交付`)
+    this.jobs.enqueue('execute', t.executor_agent_id, { taskId: t.id, afterSchedule: true, runsSeen: wait.seen, runsExpected: wait.expected })
+    this.touch(t.space_id)
+  }
+
+  /** Safety net: if runs stop reporting (runtime down, schedule edited), deliver anyway a little after the expected end. */
+  finishOverdueScheduleWaits(graceMs = 3 * 60_000): void {
+    for (const t of this.db.all<Task>("SELECT * FROM tasks WHERE schedule_wait IS NOT NULL AND status = 'in_progress'")) {
+      const wait = this.scheduleWait(t)
+      if (wait && Date.now() > wait.endsAt + graceMs) this.finishScheduleWait(t.id, `定时任务已过预计结束时间，收到 ${wait.seen}/${wait.expected} 次执行记录`)
+    }
   }
 
   submitArtifact(agent: Agent, input: { task_id: string; title: string; kind?: string; content: string; self_check?: Array<{ item: string; ok: boolean; note?: string }> }): Row {
@@ -466,14 +531,33 @@ export class Domain {
     if (t.executor_agent_id !== agent.id) throw new DomainError('只有这个任务的执行 agent 可以提交产物')
     if (t.status !== 'in_progress') throw new DomainError('任务不在进行中，不能提交')
     if (t.blocked_by_discussion) throw new DomainError('任务卡在讨论里，等讨论有结论后再提交')
+    const wait = this.scheduleWait(t)
+    if (wait) throw new DomainError(`定时任务还没跑完（${wait.seen}/${wait.expected}），现在不要提交；全部执行后系统会叫你交付，请结束本轮`)
     if (!input.content.trim()) throw new DomainError('产物内容不能为空')
     const prev = this.db.get<{ v: number }>('SELECT MAX(version) AS v FROM artifacts WHERE task_id = ?', t.id)
     const artifact = {
       id: newId('ar'), space_id: t.space_id, task_id: t.id, title: input.title.trim() || t.title, kind: input.kind || '文档',
       content: input.content, self_check: input.self_check ?? [], version: (prev?.v ?? 0) + 1, status: 'pending', created_at: now(),
     }
+    const result = parseJson<ScheduleWait | null>(t.schedule_result, null)
+    const checks = input.self_check ?? []
+    const recorded = this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM task_events WHERE task_id = ? AND text LIKE '第 % 次执行：%'", t.id)?.n ?? 0
+    // Only finite schedules with all reported runs and no failed checks can bypass human review.
+    const autoComplete = !!result && result.seen === result.expected && recorded === result.expected && checks.length > 0 && checks.every((check) => check.ok === true)
+    if (autoComplete) {
+      artifact.status = 'approved'
+      this.db.tx(() => {
+        this.db.insert('artifacts', artifact)
+        this.db.update('tasks', t.id, { status: 'done', live: '定时执行已完成', updated_at: now() })
+        this.event(t.id, 'system', null, '空间', `定时执行记录 ${recorded}/${result.expected} 齐全，交付自检全部通过，自动完成`)
+      })
+      const left = this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE space_id = ? AND status NOT IN ('done','merged')", t.space_id)
+      if (!left?.n) this.requestPlan(t.space_id)
+      this.touch(t.space_id)
+      return artifact
+    }
     this.db.insert('artifacts', artifact)
-    this.db.update('tasks', t.id, { status: 'review', live: '已交付，等负责人确认', updated_at: now() })
+    this.db.update('tasks', t.id, { status: 'review' , live: '已交付，等负责人确认', updated_at: now() })
     this.event(t.id, 'agent', agent.id, agent.name, `交付「${artifact.title}」v${artifact.version}，自检后交给负责人确认`)
     if (t.owner_id) this.jobs.enqueue('review_suggest', this.personalAgent(t.owner_id).id, { taskId: t.id, artifactId: artifact.id })
     this.touch(t.space_id)

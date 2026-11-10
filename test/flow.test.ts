@@ -110,10 +110,43 @@ test('a task without a matching specialist goes to the general agent instead of 
   const { task } = await lin.call('POST', `/api/spaces/${space.id}/tasks`, { text: '建一个定时任务，每分钟说一次 hi' })
   await app.jobs.idle(300_000)
 
-  const detail = await lin.call('GET', `/api/tasks/${task.id}`)
-  assert.equal(detail.task.status, 'review', 'executed and delivered, not left unclaimed')
+  // A finite scheduled task holds delivery until its runs report back.
+  let detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'in_progress', 'assigned instead of left unclaimed, and not delivered before the runs')
   assert.equal(detail.task.executor_name, '通用 agent')
+  assert.equal(detail.artifacts.length, 0, 'early delivery was refused')
+  assert.equal(detail.task.live, '等定时任务跑完（0/2）')
+
+  const executor = app.domain.agent(detail.task.executor_agent_id)
+  app.domain.reportScheduledRun(executor, { task_id: task.id, text: 'hi' })
+  detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.live, '等定时任务跑完（1/2）')
+  app.domain.reportScheduledRun(executor, { task_id: task.id, text: 'hi' })
+  await app.jobs.idle(300_000)
+
+  detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'done', 'complete scheduled runs do not require human approval')
+  assert.equal(detail.artifacts[0].status, 'approved')
+  assert.equal(app.domain.db.all("SELECT id FROM judgments WHERE ref_id = ? AND status = 'open'", task.id).length, 0)
   assert.equal(detail.artifacts.length, 1)
+  const history = detail.events.map((e: any) => e.text)
+  assert.ok(history.includes('第 1 次执行：hi') && history.includes('第 2 次执行：hi'), 'each run is on the task')
+})
+
+test('a scheduled task that stops reporting is delivered after its expected end', { timeout: 600_000 }, async () => {
+  const lin = new Client()
+  await lin.call('POST', '/api/login', { email: 'lin@example.com', name: '林夏' })
+  const { space } = await lin.call('POST', '/api/spaces', { name: '杂事二' })
+  const { task } = await lin.call('POST', `/api/spaces/${space.id}/tasks`, { text: '定时提醒两次喝水' })
+  await app.jobs.idle(300_000)
+  const t = app.domain.task(task.id)
+  const wait = app.domain.scheduleWait(t)!
+  app.domain.db.update('tasks', t.id, { schedule_wait: JSON.stringify({ ...wait, endsAt: Date.now() - 10 * 60_000 }) })
+  app.domain.finishOverdueScheduleWaits()
+  await app.jobs.idle(300_000)
+  const detail = await lin.call('GET', `/api/tasks/${task.id}`)
+  assert.equal(detail.task.status, 'review')
+  assert.ok(detail.events.some((e: any) => /过预计结束时间，收到 0\/2 次/.test(e.text)))
 })
 
 test('discussion flow: agent opens, participants reply, escalates, owner decides, task resumes', { timeout: 600_000 }, async () => {

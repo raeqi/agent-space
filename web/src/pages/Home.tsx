@@ -1,3 +1,4 @@
+import { CompactText } from '../ui.tsx'
 import { useEffect, useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { api, useApi, USER_STREAM } from '../api.ts'
@@ -12,15 +13,15 @@ function JudgmentCard({ j, first, onDone }: { j: any; first: boolean; onDone: ()
   const [open, setOpen] = useState(false)
   const suggestion = j.kind === 'confirm' ? j.suggestion.replace(/^(通过|打回)：/, '') : j.suggestion
   return (
-    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, ...(first ? { background: '#fafaf8', boxShadow: 'inset 2px 0 0 var(--ink)' } : {}) }}>
+    <div className="judgment-card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, ...(first ? { background: '#fafaf8', boxShadow: 'inset 2px 0 0 var(--ink)' } : {}) }}>
       <div className="spread">
         <span className="row"><Tag>{j.kind === 'confirm' ? '确认' : '定夺'}</Tag><Link to={j.link} style={{ fontWeight: 500, textDecoration: 'none' }}>{j.title}</Link></span>
         <span className="small muted">{j.space_name}</span>
       </div>
-      {j.kind === 'decide' && j.summary && <p className="sm sub">{j.summary}</p>}
+      {j.kind === 'decide' && j.summary && <p className="sm sub">{<CompactText text={j.summary} />}</p>}
       <div className="row wrap sm">
-        {j.suggestion ? <span>建议{j.kind === 'confirm' ? (j.suggested_action === 'pass' ? '通过' : '打回') : ''}：{suggestion}</span> : <span className="muted">agent 没有给出建议</span>}
-        {j.basis && <span className="small muted">依据：{j.basis}</span>}
+        {j.suggestion ? <span>建议{j.kind === 'confirm' ? (j.suggested_action === 'pass' ? '通过' : '打回') : ''}：{<CompactText text={suggestion} limit={120} />}</span> : <span className="muted">agent 没有给出建议</span>}
+        {j.basis && <span className="small muted">依据：{<CompactText text={j.basis} />}</span>}
       </div>
       {j.artifact && (
         <div className="stack" style={{ gap: 6 }}>
@@ -52,7 +53,7 @@ export function Inbox() {
             {mine?.tasks.map((t) => (
               <Link key={t.id} to={`/spaces/${t.space_id}/tasks/${t.id}`} style={{ textDecoration: 'none', display: 'flex', flexDirection: 'column', gap: 2, padding: '9px 0' }}>
                 <span className="spread"><span>{t.title}</span><span className="small muted">{t.space_name}</span></span>
-                <Live tone={t.status === 'review' ? 'warn' : undefined}>{t.live}</Live>
+                <Live tone={t.status === 'review' ? 'warn' : undefined}>{t.status === 'review' ? '等待确认' : t.blocked_by_discussion ? '等待讨论结论' : '执行中'}</Live>
               </Link>
             ))}
             {mine && mine.tasks.length === 0 && <p className="sm muted">暂无</p>}
@@ -60,7 +61,7 @@ export function Inbox() {
         </section>
         <section>
           <div className="section-label"><span>agent 最近替你做的</span><Link to="/log" className="small muted">全部</Link></div>
-          <div className="stack sm">{log?.items.slice(0, 4).map((w) => <span key={w.id}>{w.text}</span>)}{log && log.items.length === 0 && <span className="muted">暂无</span>}</div>
+          <div className="stack sm">{log?.items.slice(0, 4).map((w) => <span key={w.id}>{<CompactText text={w.text} />}</span>)}{log && log.items.length === 0 && <span className="muted">暂无</span>}</div>
         </section>
       </aside>
     </div>
@@ -86,7 +87,7 @@ export function WorkLog() {
               {items.map((w) => (
                 <div key={w.id} className="grid-row" style={{ gridTemplateColumns: '52px minmax(0,1fr) 120px 72px' }}>
                   <span className="small muted">{when(w.created_at).slice(-5)}</span>
-                  <span className="stack" style={{ gap: 2 }}><span>{w.text}</span>{w.basis && <span className="small muted">依据：{w.basis}</span>}</span>
+                  <span className="stack" style={{ gap: 2 }}><span>{<CompactText text={w.text} />}</span>{w.basis && <span className="small muted">依据：{w.basis}</span>}</span>
                   <span className="small muted">{w.space_name}</span>
                   {w.link ? <Link to={w.link} className="btn ghost">查看</Link> : <span />}
                 </div>

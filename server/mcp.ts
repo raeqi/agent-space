@@ -123,6 +123,22 @@ export function buildMcpServer(domain: Domain, agent: Agent): McpServer {
       return '已更新'
     }))
 
+    server.registerTool('wait_for_scheduled_runs', {
+      description: '创建了有限次数的定时任务、且验收要看到执行结果时使用：登记要等几次执行和最后一次的时间，然后结束本轮，不要提交产物。全部执行后（或过了 ends_at）系统会再叫你交付。不限次数的定时任务不要用，直接提交产物。',
+      inputSchema: { task_id: z.string(), schedule_id: z.string(), expected_runs: z.number().int().min(1).max(100), ends_at: z.string().describe('最后一次执行的时间，带时区的 ISO，例如 2026-11-10T14:12:00+08:00') },
+    }, guard((args: { task_id: string; schedule_id: string; expected_runs: number; ends_at: string }) => {
+      domain.waitForScheduledRuns(agent, args)
+      return '已登记。现在结束本轮，不要提交产物。'
+    }))
+
+    server.registerTool('report_scheduled_run', {
+      description: '定时任务每次执行时调用：把这一次的执行结果（一句话）记到任务上，成员能在处理记录里看到。',
+      inputSchema: { task_id: z.string(), text: z.string().min(1) },
+    }, guard(({ task_id, text }: { task_id: string; text: string }) => {
+      domain.reportScheduledRun(agent, { task_id, text })
+      return '已记录'
+    }))
+
     server.registerTool('submit_artifact', {
       description: '提交任务产物（Markdown 全文）并附上按验收标准和团队标准逐条做的自检。提交后任务进入待确认。',
       inputSchema: {

@@ -1,8 +1,13 @@
 # Agent 空间
 
-团队协作空间：人、每个人的个人 agent、空间助理和专项 agent 在同一个空间里把事做完。组织方式像工作群，但主界面是任务和进展，不是消息流。
+团队协作空间：人、每个人的个人 agent、空间助理和专项 agent 在同一个空间里把事做完。面向组织提效，在共享上下文中协调信息、分歧与执行，推动工作持续完成。
 
 基于 [DeepSeek Harness (dsh)](https://github.com/deepseek-harness/deepseek-harness)：每个 agent 都是一个真实的 dsh 运行时，通过 MCP 工具读写空间。
+
+## 产品文档
+
+- [产品初衷、问题、未来判断与目标](docs/product-intent.md)
+- [当前实现差距与后续修改方向](docs/implementation-gaps.md)
 
 ## 主流程
 

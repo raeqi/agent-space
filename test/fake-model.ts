@@ -32,6 +32,13 @@ function script(job: string, ctx: Ctx): ToolCall[] | string {
         calls.push({ name: 'open_discussion', input: { task_id: t.id, title: '动效放几期', question: '入场动效要多 4 天，放一期还是二期？', participant_user_ids: ctx.members.map((m: Ctx) => m.user_id) } })
         return calls
       }
+      // A finite scheduled task: register the wait, and (wrongly) try to deliver right away — the space must refuse.
+      const runsDone = (t.history as string[]).some((h) => h.includes('交给 agent 交付'))
+      if (/定时/.test(t.title) && !runsDone) {
+        calls.push({ name: 'wait_for_scheduled_runs', input: { task_id: t.id, schedule_id: 'schedule-test', expected_runs: 2, ends_at: new Date(Date.now() + 120_000).toISOString() } })
+        calls.push({ name: 'submit_artifact', input: { task_id: t.id, title: t.title, content: '太早了', self_check: [] } })
+        return calls
+      }
       const revised = (t.history as string[]).some((h) => h.includes('打回'))
       calls.push({ name: 'submit_artifact', input: {
         task_id: t.id, title: t.title, kind: '文档',

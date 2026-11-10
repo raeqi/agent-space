@@ -83,8 +83,14 @@ export class JobRunner implements JobSink {
     return (row?.n ?? 0) === 0 && this.inflight.size === 0
   }
 
+  private lastWaitCheck = 0
+
   private tick(): void {
     if (this.stopped || !this.domain) return
+    if (Date.now() - this.lastWaitCheck > 30_000) {
+      this.lastWaitCheck = Date.now()
+      try { this.domain.finishOverdueScheduleWaits() } catch { /* never block the queue */ }
+    }
     const queued = this.db.all<JobRow>("SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 50")
     for (const job of queued) {
       if (this.busyAgents.has(job.agent_id)) continue
@@ -112,7 +118,7 @@ export class JobRunner implements JobSink {
       }
       const agent = d.agent(job.agent_id)
       d.setActivity(agent.id, ACTIVITY[job.kind])
-      if (job.kind === 'execute') d.db.update('tasks', String(payload.taskId), { live: `${agent.name}在${payload.feedback ? '按打回意见修改' : '执行'}`, updated_at: now() })
+      if (job.kind === 'execute') d.db.update('tasks', String(payload.taskId), { live: payload.feedback ? 'agent 在按打回意见修改' : 'agent 执行中', updated_at: now() })
       if (job.kind === 'execute' || job.kind === 'triage') d.touch(d.task(String(payload.taskId)).space_id)
       if (job.kind === 'plan') d.touch(String(payload.spaceId))
       const prompt = buildPrompt(d, job.kind, agent.id, payload)
@@ -142,7 +148,7 @@ export class JobRunner implements JobSink {
     const d = this.domain
     switch (kind) {
       case 'triage': return d.task(String(p.taskId)).status === 'triage'
-      case 'execute': { const t = d.task(String(p.taskId)); return t.status === 'in_progress' && !t.blocked_by_discussion }
+      case 'execute': { const t = d.task(String(p.taskId)); return t.status === 'in_progress' && !t.blocked_by_discussion && !t.schedule_wait }
       case 'review_suggest': return d.task(String(p.taskId)).status === 'review' && !this.hasOpenJudgment('confirm', String(p.taskId))
       case 'discussion_reply':
       case 'discussion_moderate': return d.discussion(String(p.discussionId)).status === 'open'
@@ -155,7 +161,7 @@ export class JobRunner implements JobSink {
     const d = this.domain
     switch (kind) {
       case 'triage': return d.task(String(p.taskId)).status !== 'triage'
-      case 'execute': { const t = d.task(String(p.taskId)); return t.status !== 'in_progress' || !!t.blocked_by_discussion }
+      case 'execute': { const t = d.task(String(p.taskId)); return t.status !== 'in_progress' || !!t.blocked_by_discussion || !!t.schedule_wait }
       case 'review_suggest': return this.hasOpenJudgment('confirm', String(p.taskId)) || d.task(String(p.taskId)).status !== 'review'
       case 'discussion_reply': {
         const msgs = this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM discussion_messages WHERE discussion_id = ? AND author_id = ?', String(p.discussionId), agentId)

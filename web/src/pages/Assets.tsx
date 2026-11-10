@@ -1,3 +1,4 @@
+import { CompactText } from '../ui.tsx'
 import { useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, spaceStream, useApi } from '../api.ts'
@@ -13,35 +14,8 @@ function AssetPage({ active, actions, children }: { active: string; actions?: Re
   )
 }
 
-const ART_STATUS: Record<string, { label: string; tone?: 'amber' | 'green' }> = { pending: { label: '待确认', tone: 'amber' }, approved: { label: '已通过', tone: 'green' }, rejected: { label: '已打回' } }
-
 export function Artifacts() {
-  const { spaceId, artifactTaskId } = useParams()
-  const { data } = useApi<{ artifacts: any[] }>(`/api/spaces/${spaceId}/artifacts`, [spaceStream(spaceId!)])
-  const { data: task } = useApi(artifactTaskId ? `/api/tasks/${artifactTaskId}` : null)
-  const latest = task?.artifacts?.[0]
-  return (
-    <AssetPage active="产物">
-      <div className="row" style={{ alignItems: 'flex-start', gap: 20 }}>
-        <section className="card list" style={{ flex: 1, minWidth: 0 }}>
-          <div className="grid-row table-head" style={{ gridTemplateColumns: 'minmax(0,2fr) 70px minmax(0,1.4fr) 80px 90px' }}><span>产物</span><span>类型</span><span>来源任务</span><span>状态</span><span>更新</span></div>
-          {data?.artifacts.map((a) => (
-            <Link key={a.id} to={`/spaces/${spaceId}/assets/artifacts/${a.task_id}`} className="grid-row rowlink" style={{ gridTemplateColumns: 'minmax(0,2fr) 70px minmax(0,1.4fr) 80px 90px', ...(a.task_id === artifactTaskId ? { background: '#f7f7f5' } : {}) }}>
-              <span>{a.title} <span className="small muted">v{a.version}</span></span><span className="small muted">{a.kind}</span><span className="sm sub">{a.task_title}</span>
-              <span><Tag tone={ART_STATUS[a.status]?.tone}>{ART_STATUS[a.status]?.label}</Tag></span><span className="small muted">{when(a.created_at)}</span>
-            </Link>
-          ))}
-          {data && data.artifacts.length === 0 && <div className="empty">任务交付后自动归档到这里</div>}
-        </section>
-        {latest && (
-          <section className="card pad stack" style={{ flex: '0 0 440px' }}>
-            <div className="spread"><h3>{latest.title}</h3><Link to={`/spaces/${spaceId}/tasks/${artifactTaskId}`} className="small muted">任务</Link></div>
-            <div className="doc" style={{ maxHeight: 560, border: 0, padding: 0 }}><Markdown text={latest.content} /></div>
-          </section>
-        )}
-      </div>
-    </AssetPage>
-  )
+  return <Files products />
 }
 
 export function Skills() {
@@ -138,7 +112,7 @@ export function Memory() {
       {answer && <div className="card pad sm" style={{ background: 'var(--side)', border: 0 }}>{answer}</div>}
       <section className="card list">
         {items.map((m) => (
-          <div key={m.id} className="grid-row" style={{ gridTemplateColumns: '90px 56px minmax(0,1fr)' }}><span className="small muted">{when(m.created_at)}</span><span><Tag>{MEM_KIND[m.kind]}</Tag></span><span className="sm">{m.text}</span></div>
+          <div key={m.id} className="grid-row" style={{ gridTemplateColumns: '90px 56px minmax(0,1fr)' }}><span className="small muted">{when(m.created_at)}</span><span><Tag>{MEM_KIND[m.kind]}</Tag></span><span className="sm">{<CompactText text={m.text} />}</span></div>
         ))}
         {data && items.length === 0 && <div className="empty">暂无记录</div>}
       </section>
@@ -146,7 +120,7 @@ export function Memory() {
   )
 }
 
-export function Files() {
+export function Files({ products = false }: { products?: boolean }) {
   const { spaceId } = useParams()
   const { data, reload } = useApi<{ files: any[] }>(`/api/spaces/${spaceId}/files`, [spaceStream(spaceId!)])
   const input = useRef<HTMLInputElement>(null)
@@ -163,20 +137,20 @@ export function Files() {
     reload()
   }
   return (
-    <AssetPage active="资料" actions={<>
+    <AssetPage active={products ? "产物" : "资料"} actions={<>
       <button className="btn" disabled title="即将支持">从工作群导入</button>
       <input ref={input} type="file" multiple accept=".md,.txt,.csv,.json,.yaml,.yml,.html,.log" className="sr" id="upload" onChange={(e) => void upload(e.target.files)} />
       <label htmlFor="upload" className="btn primary">上传</label>
     </>}>
       {error && <p className="error">{error}</p>}
       <section className="card list">
-        <div className="grid-row table-head" style={{ gridTemplateColumns: 'minmax(0,2fr) 90px 90px 90px 90px' }}><span>资料</span><span>大小</span><span>加入者</span><span>被读取</span><span>时间</span></div>
+        <div className="grid-row table-head" style={{ gridTemplateColumns: 'minmax(0,2fr) 90px 90px 90px 90px' }}><span>文件</span><span>大小</span><span>加入者</span><span>被读取</span><span>时间</span></div>
         {data?.files.map((f) => (
           <div key={f.id} className="grid-row" style={{ gridTemplateColumns: 'minmax(0,2fr) 90px 90px 90px 90px' }}>
-            <span>{f.name}</span><span className="small muted">{f.size > 1024 ? `${Math.round(f.size / 1024)} KB` : `${f.size} B`}</span><span className="small muted">{f.added_by_name}</span><span className="small muted">{f.reads ? `${f.reads} 次` : '—'}</span><span className="small muted">{when(f.created_at)}</span>
+            <a href={`/api/spaces/${spaceId}/files/${f.id}/download`}>{f.name}</a><span className="small muted">{f.size > 1024 ? `${Math.round(f.size / 1024)} KB` : `${f.size} B`}</span><span className="small muted">{f.added_by_name}</span><span className="small muted">{f.reads ? `${f.reads} 次` : '—'}</span><span className="small muted">{when(f.created_at)}</span>
           </div>
         ))}
-        {data && data.files.length === 0 && <div className="empty">上传背景材料（文本、Markdown、CSV），agent 执行任务时会读取并注明出处</div>}
+        {data && data.files.length === 0 && <div className="empty">尚无文件，上传或创建的文件会显示在这里</div>}
       </section>
     </AssetPage>
   )
