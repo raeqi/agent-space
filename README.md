@@ -7,7 +7,6 @@
 ## 产品文档
 
 - [产品初衷、问题、未来判断与目标](docs/product-intent.md)
-- [当前实现差距与后续修改方向](docs/implementation-gaps.md)
 
 ## 主流程
 
