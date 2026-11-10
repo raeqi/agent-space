@@ -137,10 +137,21 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
           {d.outcome && <span className="small muted">{d.outcome}</span>}
         </Link>
       ))}
-      <div className="stack" style={{ gap: 4 }}>
-        <button className="btn ghost small" style={{ alignSelf: 'flex-start', padding: 0 }} onClick={() => setShowHistory(!showHistory)}>过程 {data.events.length}</button>
-        {showHistory && data.events.map((e: any) => <span key={e.id} className="sm"><span className="muted small">{when(e.created_at)}</span> {e.actor_name}：{e.text}</span>)}
-      </div>
+      {data.events.length > 0 && (
+        <div className="stack" style={{ gap: 6 }}>
+          <button className="btn small history-toggle" aria-expanded={showHistory} title="谁在这个任务上做了什么，按时间排列" onClick={() => setShowHistory(!showHistory)}>
+            <span aria-hidden="true">{showHistory ? '▾' : '▸'}</span>
+            {showHistory ? '收起处理过程' : `处理过程（${data.events.length} 条）`}
+          </button>
+          {showHistory && (
+            <ol className="history">
+              {data.events.map((e: any) => (
+                <li key={e.id} className="sm"><span className="muted small">{when(e.created_at)}</span> <b>{e.actor_name}</b>：{e.text}</li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
       {data.judgment && (
         <div style={{ marginTop: 'auto', borderTop: '1px solid var(--line2)', paddingTop: 14 }} className="stack">
           {data.judgment.suggestion && <span className="sm">{data.judgment.user_id === me.user.id ? '你的 agent ' : `${t.owner_name}的 agent `}建议{data.judgment.suggestion}</span>}
