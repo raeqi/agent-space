@@ -40,11 +40,13 @@ npm start
 | 服务 | `MODEL_BASE_URL` | `MODEL_NAME` 示例 |
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | `gpt-4.1` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-pro` |
 | Kimi / Moonshot（国内） | `https://api.moonshot.cn/v1` | `kimi-k2` |
 | Kimi / Moonshot（国际） | `https://api.moonshot.ai/v1` | `kimi-k2` |
 | 通义千问 / DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.5-air` |
+
+DeepSeek 用 `deepseek-v4-pro`。`deepseek-flash` 更快、更便宜。`deepseek-chat` 是旧别名，请求会落到 flash。
 
 `COOKIE_SECRET` 在演示模式可以不填，程序会在数据目录生成一把并记住。接上真实模型、给别人用时再改成你自己的随机字符串。
 
@@ -129,7 +131,7 @@ npm start
 
 只配置了 `DEEPSEEK_API_KEY` 的旧 `.env` 可以继续用，服务仍走 DeepSeek 官方接口，模型默认 `deepseek-flash`。这时 `MODEL_BASE_URL` 的含义和以前一样：它覆盖 DeepSeek 的 Anthropic Messages 地址（测试里的脚本化模型也走这条路径）。
 
-建议改成 `MODEL_API_KEY`、`MODEL_BASE_URL`、`MODEL_NAME` 后重启。一旦设置了 `MODEL_API_KEY` 或 `MODEL_NAME`，同一个 `MODEL_BASE_URL` 就按 OpenAI Chat Completions 调用；DeepSeek 请改用上表里的 `https://api.deepseek.com/v1`。`DSH_MODEL` 在 `MODEL_NAME` 未设置时仍作为模型名。`DSH_PROVIDER` 只在没有这些新变量时生效。启动时如果仍在读旧变量，会打一行提示。
+建议改成 `MODEL_API_KEY`、`MODEL_BASE_URL`、`MODEL_NAME` 后重启。一旦设置了 `MODEL_API_KEY` 或 `MODEL_NAME`，同一个 `MODEL_BASE_URL` 就按 OpenAI Chat Completions 调用；DeepSeek 请用 `https://api.deepseek.com` 和 `deepseek-v4-pro`（`deepseek-flash` 更快、更便宜）。`DSH_MODEL` 在 `MODEL_NAME` 未设置时仍作为模型名。`DSH_PROVIDER` 只在没有这些新变量时生效。启动时如果仍在读旧变量，会打一行提示。
 
 ## 本地运行与开发
 
