@@ -32,6 +32,18 @@ const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible'
 const PROVIDER_ID = /^[a-z][a-z0-9-]*$/
 
 /**
+ * Demo mode uses the in-process scripted model. It is on when DEMO_MODE is
+ * explicitly enabled, or when neither the new key nor the legacy key is set.
+ * DEMO_MODE=0 keeps the previous "refuse to boot without a key" check.
+ */
+export function demoModeFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const flag = (env.DEMO_MODE ?? '').trim().toLowerCase()
+  if (flag === '1' || flag === 'true' || flag === 'yes' || flag === 'on') return true
+  if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') return false
+  return !nonEmpty(env, 'MODEL_API_KEY') && !nonEmpty(env, 'DEEPSEEK_API_KEY')
+}
+
+/**
  * Resolve the model route from the environment.
  *
  * The public setup is MODEL_API_KEY + MODEL_BASE_URL + MODEL_NAME. A custom base URL
@@ -75,8 +87,9 @@ export function resolveModelSettings(env: NodeJS.ProcessEnv): ModelSettings {
   return { provider, model, modelBaseUrl, apiKeyEnv, modelRoute }
 }
 
-/** Boot-time message when the process cannot call a model. Null when configuration is usable. */
+/** Boot-time message when the process cannot call a model. Null when configuration is usable or demo mode will supply one. */
 export function modelConfigProblem(settings: ModelSettings, env: NodeJS.ProcessEnv): string | null {
+  if (demoModeFromEnv(env)) return null
   if (!PROVIDER_ID.test(settings.provider)) {
     return `[agent-space] 供应商 id「${settings.provider}」无法使用。设置 MODEL_API_KEY、MODEL_BASE_URL 和 MODEL_NAME 即可连接任意 OpenAI 兼容服务，MODEL_PROVIDER 可以留空。`
   }
@@ -129,6 +142,8 @@ export interface Config {
   /** Max agent runtimes running turns at once. */
   maxConcurrentAgents: number
   webDist: string
+  /** Scripted model and seeded space, instead of a configured provider. */
+  demoMode: boolean
 }
 
 export function loadConfig(overrides: Partial<Config> = {}, env: NodeJS.ProcessEnv = process.env): Config {
@@ -150,6 +165,7 @@ export function loadConfig(overrides: Partial<Config> = {}, env: NodeJS.ProcessE
     agentIdleMs: Number(readEnv(env, 'AGENT_IDLE_MS', String(10 * 60_000))),
     maxConcurrentAgents: Number(readEnv(env, 'MAX_CONCURRENT_AGENTS', '4')),
     webDist: resolve(readEnv(env, 'WEB_DIST', './dist')),
+    demoMode: demoModeFromEnv(env),
   }
   return { ...base, ...overrides }
 }

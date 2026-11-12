@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { legacyModelConfigWarning, loadConfig, modelConfigProblem } from '../server/config.ts'
+import { demoModeFromEnv, legacyModelConfigWarning, loadConfig, modelConfigProblem } from '../server/config.ts'
 import { modelPluginPatch } from '../server/agents/runtime.ts'
 
 function freePort(): Promise<number> {
@@ -57,14 +57,30 @@ test('a legacy DeepSeek key keeps the official adapter, including a base URL ove
   assert.equal(legacyModelConfigWarning({ MODEL_API_KEY: 'sk-generic', MODEL_NAME: 'kimi-k2' }), null)
 })
 
-test('an empty key tells the operator to set the generic variables', () => {
+test('no key selects demo mode instead of refusing to boot', () => {
   const config = loadConfig({}, {})
-  const problem = modelConfigProblem(config, {})
+  assert.equal(config.demoMode, true)
+  assert.equal(demoModeFromEnv({}), true)
+  assert.equal(modelConfigProblem(config, {}), null)
+})
+
+test('DEMO_MODE=0 without a key still names the generic variables', () => {
+  const env = { DEMO_MODE: '0' }
+  const config = loadConfig({}, env)
+  assert.equal(config.demoMode, false)
+  const problem = modelConfigProblem(config, env)
   assert.ok(problem)
   assert.match(problem, /MODEL_API_KEY/)
   assert.match(problem, /MODEL_BASE_URL/)
   assert.match(problem, /MODEL_NAME/)
   assert.doesNotMatch(problem, /DEEPSEEK/)
+})
+
+test('DEMO_MODE=1 forces demo mode even when a key is set', () => {
+  const env = { DEMO_MODE: '1', MODEL_API_KEY: 'sk-generic', MODEL_BASE_URL: 'https://api.openai.com/v1', MODEL_NAME: 'gpt-4.1' }
+  const config = loadConfig({}, env)
+  assert.equal(config.demoMode, true)
+  assert.equal(modelConfigProblem(config, env), null)
 })
 
 test('a generic key without a base URL or model name names both missing variables', () => {
@@ -89,28 +105,65 @@ test('MODEL_PROVIDER without a base URL uses the harness catalog', () => {
 
 function childEnv(extra: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
-  for (const name of ['MODEL_API_KEY', 'MODEL_BASE_URL', 'MODEL_NAME', 'MODEL_PROVIDER', 'DEEPSEEK_API_KEY', 'DSH_MODEL', 'DSH_PROVIDER', 'DEEPSEEK_BASE_URL']) {
+  for (const name of ['MODEL_API_KEY', 'MODEL_BASE_URL', 'MODEL_NAME', 'MODEL_PROVIDER', 'DEEPSEEK_API_KEY', 'DSH_MODEL', 'DSH_PROVIDER', 'DEEPSEEK_BASE_URL', 'DEMO_MODE', 'COOKIE_SECRET']) {
     if (extra[name] === undefined) delete env[name]
   }
   return env
 }
 
-test('the server boots on the generic variables and rejects an empty key', async () => {
-  const empty = spawn(process.execPath, ['server/index.ts'], { env: childEnv({}), stdio: ['ignore', 'pipe', 'pipe'] })
-  let emptyOut = ''
-  empty.stdout!.setEncoding('utf8')
-  empty.stderr!.setEncoding('utf8')
-  empty.stdout!.on('data', (chunk) => { emptyOut += chunk })
-  empty.stderr!.on('data', (chunk) => { emptyOut += chunk })
-  const emptyCode = await new Promise<number | null>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`empty-key process did not exit\n${emptyOut}`)), 30_000)
-    empty.on('exit', (code) => { clearTimeout(timer); resolve(code) })
+async function stop(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null) return
+  child.kill('SIGTERM')
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(undefined) }, 10_000)
+    child.on('exit', () => { clearTimeout(timer); resolve(undefined) })
   })
-  assert.equal(emptyCode, 1)
-  assert.match(emptyOut, /MODEL_API_KEY/)
-  assert.match(emptyOut, /MODEL_BASE_URL/)
-  assert.match(emptyOut, /MODEL_NAME/)
-  assert.doesNotMatch(emptyOut, /DEEPSEEK_API_KEY/)
+}
+
+test('the server boots without a key in demo mode, and with the generic variables for a real model', async () => {
+  const demoDir = mkdtempSync(join(tmpdir(), 'agent-space-demo-'))
+  const demoPort = await freePort()
+  const demo = spawn(process.execPath, ['server/index.ts'], {
+    env: childEnv({ PORT: String(demoPort), HOST: '127.0.0.1', DATA_DIR: demoDir }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let demoOut = ''
+  demo.stdout!.setEncoding('utf8')
+  demo.stderr!.setEncoding('utf8')
+  demo.stdout!.on('data', (chunk) => { demoOut += chunk })
+  demo.stderr!.on('data', (chunk) => { demoOut += chunk })
+  try {
+    const deadline = Date.now() + 30_000
+    let body: { demoMode?: boolean; model?: string } | undefined
+    while (Date.now() < deadline) {
+      if (demo.exitCode !== null) throw new Error(`demo server exited ${demo.exitCode}\n${demoOut}`)
+      try {
+        const response = await fetch(`http://127.0.0.1:${demoPort}/api/config`)
+        if (response.ok) {
+          body = await response.json() as { demoMode?: boolean; model?: string }
+          break
+        }
+      } catch {
+        // not listening yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+    assert.equal(body?.demoMode, true, demoOut)
+    assert.equal(body?.model, 'demo', demoOut)
+    assert.match(demoOut, /演示模式/)
+    const login = await fetch(`http://127.0.0.1:${demoPort}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'lin@demo.local', name: '林夏' }) })
+    assert.equal(login.status, 200, demoOut)
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? ''
+    const spaces = await fetch(`http://127.0.0.1:${demoPort}/api/spaces`, { headers: { cookie } })
+    const listed = await spaces.json() as { spaces: Array<{ name: string }> }
+    assert.ok(listed.spaces.some((s) => s.name === '新支付上线'), demoOut)
+    const me = await fetch(`http://127.0.0.1:${demoPort}/api/me`, { headers: { cookie } })
+    const profile = await me.json() as { agent: { handbook: string } }
+    assert.match(profile.agent.handbook, /会打回/)
+  } finally {
+    await stop(demo)
+    rmSync(demoDir, { recursive: true, force: true })
+  }
 
   const port = await freePort()
   const dataDir = mkdtempSync(join(tmpdir(), 'agent-space-config-'))
@@ -148,12 +201,9 @@ test('the server boots on the generic variables and rejects an empty key', async
       await new Promise((resolve) => setTimeout(resolve, 200))
     }
     assert.equal(body?.model, 'generic-model', output)
+    assert.equal((body as { demoMode?: boolean }).demoMode, false, output)
   } finally {
-    child.kill('SIGTERM')
-    await new Promise((resolve) => {
-      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(undefined) }, 10_000)
-      child.on('exit', () => { clearTimeout(timer); resolve(undefined) })
-    })
+    await stop(child)
     rmSync(dataDir, { recursive: true, force: true })
   }
 })

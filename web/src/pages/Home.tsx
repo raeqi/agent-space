@@ -3,10 +3,10 @@ import { useEffect, useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { api, useApi, USER_STREAM } from '../api.ts'
 import { JudgmentActions } from '../judgment.tsx'
-import { Live, Markdown, Nav, Tag, logout, useMe, when } from '../ui.tsx'
+import { DemoBanner, Live, Markdown, Nav, Tag, logout, useMe, when } from '../ui.tsx'
 
 export function PersonalLayout() {
-  return <div className="app"><Nav /><main className="main"><Outlet /></main></div>
+  return <div className="app"><Nav /><main className="main"><DemoBanner /><Outlet /></main></div>
 }
 
 function JudgmentCard({ j, first, onDone }: { j: any; first: boolean; onDone: () => void }) {
@@ -102,6 +102,7 @@ export function WorkLog() {
 
 export function MyAgent() {
   const { me, refresh } = useMe()
+  const { data: cfg } = useApi<{ demoMode?: boolean }>('/api/config')
   const [profile, setProfile] = useState(me.agent.public_profile)
   const [handbook, setHandbook] = useState(me.agent.handbook)
   const [saved, setSaved] = useState(false)
@@ -123,7 +124,7 @@ export function MyAgent() {
         <div className="field">
           <label className="label" htmlFor="handbook">判断手册</label>
           <textarea id="handbook" className="textarea" style={{ minHeight: 140 }} placeholder="你在意什么、怎么取舍、什么情况一定要问你" value={handbook} onChange={(e) => setHandbook(e.target.value)} />
-          <span className="small muted">只给你的 agent 用，不会出现在空间里</span>
+          <span className="small muted">只给你的 agent 用，不会出现在空间里。{cfg?.demoMode ? '这里写下的内容，代替个人桌面 agent 已经学到的记忆。' : ''}</span>
         </div>
         <div className="row"><button className="btn primary lg" onClick={() => void save()}>保存</button>{saved && <span className="sm muted">已保存</span>}</div>
         <section className="card pad spread">

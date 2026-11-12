@@ -69,7 +69,7 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
     const row = unsigned?.valid && unsigned.value ? db.get<{ user_id: string }>('SELECT user_id FROM login_sessions WHERE token = ?', unsigned.value) : undefined
     return { loggedIn: !!row }
   })
-  app.get('/api/config', async () => ({ accessCodeRequired: !!config.accessCode, model: config.model }))
+  app.get('/api/config', async () => ({ accessCodeRequired: !!config.accessCode, model: config.model, demoMode: config.demoMode }))
 
   // ---------- me ----------
 

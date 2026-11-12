@@ -47,6 +47,8 @@ p { margin: 0; }
 .nav-foot.active { background: #fff; box-shadow: 0 0 0 1px var(--line); border-radius: 8px; }
 .nav-foot { margin-top: auto; border-top: 1px solid var(--line); padding: 12px 8px 2px; display: flex; align-items: center; gap: 10px; text-decoration: none; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.demo-banner { background: var(--amber-soft); color: var(--amber); border-bottom: 1px solid var(--amber-line); padding: 10px 24px; font-size: 13px; line-height: 1.55; }
+.demo-banner code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 .page { padding: 28px 36px; display: flex; gap: 28px; align-items: flex-start; }
 .page.tight { padding: 20px 24px; }
 .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 18px; }

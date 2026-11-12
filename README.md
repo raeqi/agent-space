@@ -1,5 +1,9 @@
 # Agent 空间 · 让团队的 Agent 一起把事情做完
 
+Agent 空间是个人桌面 agent 的团队形态。每个人身边已经有一个个人 agent：它观察工作，记住偏好和标准，能替主人先做一步。拾遗是这种个人 agent 的一种样子。这个产品要看的是下一步：这些已经了解主人的个人 agent 走进同一个空间，代表各自的主人，和空间助理、专项 agent 一起把事情做完；只有需要人拍板的时候，事情才来到人面前。
+
+这个演示假定那段了解已经发生。页面里的公开档案和判断手册，写下的是桌面 agent 日积月累会学到的工作方式、标准和过往决定。学习过程本身不在这次演示里。
+
 > 你把一件事交进空间，空间助理整理需求、安排执行；
 > 遇到分歧，相关成员的个人 Agent 带着各自的标准参与讨论，需要拍板时再来找人；
 > 结果留下，确认和打回的理由也能成为团队下一次做事的标准。
@@ -11,6 +15,38 @@
 - 空间助理负责整理与协调，通用及专项 Agent 负责实际执行。
 
 先读[产品初衷与方向](docs/product-intent.md)，了解我们看到的问题与未来判断；角色分工、产品形态和使用流程见 **[完整产品说明](docs/product-overview.md)**。
+
+## 先跑起来
+
+两条路，看你想体验到哪一步。
+
+| | 不填 API key | 填写 API key |
+|---|---|---|
+| 你会看到 | **演示模式**。回复由脚本生成，协作流程是真的：整理、执行、讨论、预审、通过或打回、沉淀团队标准 | **真实模型**。agent 会按你填的服务阅读、调用工具、自己判断 |
+| 怎么做 | 下面三条命令，不用准备 `.env` | 在项目根目录的 `.env` 填写 `MODEL_API_KEY`、`MODEL_BASE_URL`、`MODEL_NAME`，然后同样启动 |
+
+不填 key，直接跑：
+
+```sh
+npm install
+npm run build
+npm start
+```
+
+打开 http://localhost:8787 ，点「以林夏的身份看演示」，或用 `lin@demo.local` 登录、名字填林夏。空库会带上一份进行中的「新支付上线」。
+
+要换成真实模型，把下面三项写进 `.env` 后重启。key 放在这个文件里，不要写进源码或提交到仓库。模型名以服务商控制台为准：
+
+| 服务 | `MODEL_BASE_URL` | `MODEL_NAME` 示例 |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4.1` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| Kimi / Moonshot（国内） | `https://api.moonshot.cn/v1` | `kimi-k2` |
+| Kimi / Moonshot（国际） | `https://api.moonshot.ai/v1` | `kimi-k2` |
+| 通义千问 / DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.5-air` |
+
+`COOKIE_SECRET` 在演示模式可以不填，程序会在数据目录生成一把并记住。接上真实模型、给别人用时再改成你自己的随机字符串。
 
 ---
 
@@ -66,7 +102,7 @@
 
 这是一个可运行的产品原型，完整产品说明包含尚未实现的目标能力。
 
-- 个人 Agent 对主人的理解，目前主要来自显式配置的公开档案和判断手册，尚未形成持续学习。
+- 个人 agent 能代表主人，是因为它在进空间之前已经了解这个人。演示用公开档案和判断手册写下这些理解，代替桌面 agent 本来会学到的记忆；学习过程不在这次演示里。
 - 主动信息同步、求助路由、跨空间协调仍待完善。
 - 目前任务执行和交付流程最完整，任务之外的持续协作还需要补齐。
 - 从既有协作工具导入成员和资料、接入桌面端个人 Agent 尚未实现。
@@ -74,27 +110,18 @@
 
 ## 模型与 API key 配置
 
+不填 key 就会进入上面的演示模式。下面只在你要接真实模型时需要。
+
 当前版本由部署者在服务端配置模型密钥，页面尚不支持每位用户分别填写自己的 key。运行这个实例产生的模型调用费用，由服务端配置的密钥所属账户承担。
 
 密钥放在项目根目录的 `.env`，不绑定某一家服务商。对方只要提供 OpenAI 兼容的 Chat Completions 接口，就填写 key、base URL 和模型名。`.env` 已被 Git 忽略。真实 key 只留在这一个文件里，不要写进源码、截图、共享文档或提交到仓库。
 
 1. 将 `.env.example` 复制为 `.env`。
 2. 在 `MODEL_API_KEY=` 后面填入你自己申请的 API key。
-3. 填写 `MODEL_BASE_URL` 和 `MODEL_NAME`。base URL 停在版本前缀，一般以 `/v1` 结尾。
-4. 设置 `COOKIE_SECRET`，然后启动服务。换 key 或换模型后也要重启。
+3. 填写 `MODEL_BASE_URL` 和 `MODEL_NAME`。base URL 停在版本前缀，一般以 `/v1` 结尾。常见组合见上面的表。
+4. 给别人用时设置 `COOKIE_SECRET`，然后重启。换 key 或换模型后也要重启。
 
-启动时如果提示缺少配置，检查 `.env` 是否在项目根目录、这三个值是否为空。
-
-常见组合如下。模型名以各服务商控制台为准：
-
-| 服务 | `MODEL_BASE_URL` | `MODEL_NAME` 示例 |
-|---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4.1` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| Kimi / Moonshot（国内） | `https://api.moonshot.cn/v1` | `kimi-k2` |
-| Kimi / Moonshot（国际） | `https://api.moonshot.ai/v1` | `kimi-k2` |
-| 通义千问 / DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.5-air` |
+只填了 key、却没填地址或模型名时，启动会指出缺哪一项。`DEMO_MODE=1` 可以在已经填了 key 时仍强制走演示模式。
 
 自定义 base URL 会按 OpenAI 兼容接口连接，一般只填上面三个变量。`MODEL_PROVIDER` 可以不写；只有在使用 harness 自带的供应商目录、并且不填 `MODEL_BASE_URL` 时才需要它，例如 `openai`、`moonshotai`、`anthropic`。
 
@@ -111,13 +138,12 @@
 
 ## 运行
 
-需要 Node.js 24.9 或更高版本。每位部署者必须配置自己的模型 API key，项目不附带个人密钥。
+需要 Node.js 24.9 或更高版本。不填模型 API key 就是演示模式；要接真实模型时，每位部署者使用自己的 key，项目不附带个人密钥。
 
 ```sh
-cp .env.example .env    # 填入 MODEL_API_KEY、MODEL_BASE_URL、MODEL_NAME 和 COOKIE_SECRET
 npm install
 npm run build
-npm start               # http://localhost:8787
+npm start               # http://localhost:8787 ，不填 key 就是演示模式
 ```
 
 用 Docker：
@@ -142,11 +168,12 @@ DATA_DIR=./data-demo npm start
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `MODEL_API_KEY` | — | 模型 API key，和下面两项一起填 |
+| `MODEL_API_KEY` | 空 | 留空进入演示模式。要真实模型时，和下面两项一起填 |
 | `MODEL_BASE_URL` | 空 | OpenAI 兼容接口地址 |
 | `MODEL_NAME` | 空 | 模型名 |
 | `MODEL_PROVIDER` | 空 | 一般留空。不填 base URL 时，用来选择 harness 内置供应商 |
-| `COOKIE_SECRET` | 开发用默认值 | 生产环境必须修改 |
+| `DEMO_MODE` | 空 | 设为 `1` 时，即使填了 key 也用脚本回复 |
+| `COOKIE_SECRET` | 演示模式自动生成 | 生产环境必须修改 |
 | `ACCESS_CODE` | 空 | 登录访问码 |
 | `DEEPSEEK_API_KEY` | — | 旧变量。只设置它时仍走 DeepSeek 官方接口 |
 | `DSH_MODEL` | 旧部署为 `deepseek-flash` | 旧变量。`MODEL_NAME` 未设置时作为模型名 |
