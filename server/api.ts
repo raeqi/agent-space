@@ -3,7 +3,7 @@ import type { Config } from './config.ts'
 import type { Domain, User } from './domain.ts'
 import { DomainError } from './domain.ts'
 import { newToken, now, parseJson } from './db.ts'
-import type { AgentRuntimePool } from './agents/runtime.ts'
+import { runOptionsForJob, type AgentRuntimePool } from './agents/runtime.ts'
 import { buildMemoryQuestion } from './agents/prompts.ts'
 import type { BusEvent } from './bus.ts'
 
@@ -315,7 +315,7 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
     const question = str(((req.body ?? {}) as Body).question, 500).trim()
     if (!question) throw new DomainError('请输入问题')
     const assistant = domain.assistantOf(id)
-    const result = await pool.run(assistant, buildMemoryQuestion(domain, id, question))
+    const result = await pool.run(assistant, buildMemoryQuestion(domain, id, question), runOptionsForJob(config, 'memory_ask'))
     return { answer: result.finalResponse }
   })
 

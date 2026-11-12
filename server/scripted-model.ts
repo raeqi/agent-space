@@ -31,7 +31,7 @@ function script(job: string, ctx: Ctx): ToolCall[] | string {
       const t = ctx.task
       const history = (t.history as string[]) ?? []
       const decided = history.some((h) => h.includes('结论写回'))
-      const calls: ToolCall[] = [{ name: 'post_progress', input: { task_id: t.id, text: '先对照验收和团队标准列提纲，再逐条写完。' } }]
+      const calls: ToolCall[] = []
       if (/取舍/.test(t.title) && !decided) {
         calls.push({ name: 'open_discussion', input: {
           task_id: t.id, title: '动效放几期',

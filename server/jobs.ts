@@ -3,6 +3,7 @@ import { newId, now, parseJson } from './db.ts'
 import type { Domain, JobKind, JobSink } from './domain.ts'
 import type { AgentRuntimePool } from './agents/runtime.ts'
 import { buildPrompt } from './agents/prompts.ts'
+import { runOptionsForJob } from './agents/runtime.ts'
 
 interface JobRow {
   id: string
@@ -121,8 +122,8 @@ export class JobRunner implements JobSink {
       if (job.kind === 'execute') d.db.update('tasks', String(payload.taskId), { live: payload.feedback ? 'agent 在按打回意见修改' : 'agent 执行中', updated_at: now() })
       if (job.kind === 'execute' || job.kind === 'triage') d.touch(d.task(String(payload.taskId)).space_id)
       if (job.kind === 'plan') d.touch(String(payload.spaceId))
-      const prompt = buildPrompt(d, job.kind, agent.id, payload)
-      const result = await this.pool.run(agent, prompt)
+      const prompt = buildPrompt(d, job.kind, agent.id, payload, { lightMode: this.pool.config.lightMode })
+      const result = await this.pool.run(agent, prompt, runOptionsForJob(this.pool.config, job.kind))
       this.db.update('jobs', job.id, { dsh_session_id: result.sessionId })
       if (!this.effectHappened(job.kind, payload, job.agent_id)) error = `agent 没有完成预期操作（${result.finishReason ?? 'unknown'}）：${result.finalResponse.slice(0, 300)}`
     } catch (e) {

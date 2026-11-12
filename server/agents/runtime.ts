@@ -26,7 +26,22 @@ function yamlString(value: string): string {
  * OpenAI Chat Completions: the harness treats an unrecognized URL as OpenAI itself,
  * and the two compat switches below are the ones typical compatible gateways reject.
  */
-export function modelPluginPatch(config: Config): string[] {
+/** Local tools a one-shot space job never needs. Execute jobs keep them. */
+const SPACE_ONLY_DISABLED = [
+  'tool-bash', 'tool-pwsh', 'tool-fs', 'tool-fs-search', 'tool-jobs', 'tool-schedule',
+  'tool-ask-user', 'tool-web', 'tool-subagent', 'tool-subagent-fork', 'tool-subagent-control',
+  'tool-todo', 'tool-goal', 'tool-workflow', 'tool-skill', 'present',
+]
+
+export type ToolProfile = 'full' | 'space'
+
+/** Execute keeps the configured model and local tools. Every other job uses the light model and space MCP tools only. */
+export function runOptionsForJob(config: Config, kind: string): { model: string; tools: ToolProfile } {
+  if (kind === 'execute') return { model: config.model, tools: 'full' }
+  return { model: config.lightModel || config.model, tools: 'space' }
+}
+
+export function modelPluginPatch(config: Config, model = config.model): string[] {
   if (config.modelRoute === 'deepseek') {
     if (!config.modelBaseUrl) return []
     return ['- id: llm-deepseek', '  config:', `    baseURL: ${yamlString(config.modelBaseUrl)}`]
@@ -49,7 +64,7 @@ export function modelPluginPatch(config: Config): string[] {
     '          supportsDeveloperRole: false',
     '          maxTokensField: max_tokens',
     '        models:',
-    `          - id: ${yamlString(config.model)}`,
+    `          - id: ${yamlString(model)}`,
   )
   return lines
 }
@@ -70,7 +85,7 @@ function persona(agent: Agent): string {
  * the patch wires the agent's MCP connection (with its bearer token) and persona into the dsh profile.
  */
 export class AgentRuntimePool {
-  private readonly config: Config
+  readonly config: Config
   private readonly slots = new Map<string, Slot>()
   private running = 0
   private readonly waiters: Array<() => void> = []
@@ -87,16 +102,18 @@ export class AgentRuntimePool {
     this.sweeper.unref()
   }
 
-  private paths(agent: Agent): { home: string; workspace: string; patch: string } {
+  private paths(agent: Agent, model: string, tools: ToolProfile): { home: string; workspace: string; patch: string } {
     const root = join(this.config.dataDir, 'agents', agent.id)
-    return { home: join(root, 'dsh-home'), workspace: join(root, 'workspace'), patch: join(root, 'patch.yml') }
+    const safeModel = model.replace(/[^a-zA-Z0-9._-]/g, '_')
+    return { home: join(root, tools === 'full' ? 'dsh-home' : 'dsh-home-space'), workspace: join(root, 'workspace'), patch: join(root, `patch-${tools}-${safeModel}.yml`) }
   }
 
-  private writePatch(agent: Agent): string {
-    const p = this.paths(agent)
+  private writePatch(agent: Agent, model: string, tools: ToolProfile): string {
+    const p = this.paths(agent, model, tools)
     mkdirSync(p.home, { recursive: true })
     mkdirSync(p.workspace, { recursive: true })
-    const lines = modelPluginPatch(this.config)
+    const lines = modelPluginPatch(this.config, model)
+    if (tools === 'space') for (const id of SPACE_ONLY_DISABLED) lines.push(`- id: ${id}`, '  disabled: true')
     lines.push('- id: system-prompt', '  config:', `    personaPrefix: ${yamlString(persona(agent))}`)
     lines.push(
       '- insert:',
@@ -115,23 +132,25 @@ export class AgentRuntimePool {
     return p.patch
   }
 
-  private slotFor(agent: Agent): Slot {
-    const existing = this.slots.get(agent.id)
+  private slotFor(agent: Agent, model = this.config.model, tools: ToolProfile = 'full'): Slot {
+    const key = `${agent.id}:${tools}:${model}`
+    const existing = this.slots.get(key)
     if (existing) return existing
-    const p = this.paths(agent)
-    const patch = this.writePatch(agent)
+    const p = this.paths(agent, model, tools)
+    const patch = this.writePatch(agent, model, tools)
     const harness = new DeepSeekHarness({
       profile: 'sdk',
       dshHome: p.home,
       patches: [patch],
       cwd: p.workspace,
       provider: this.config.provider,
-      model: this.config.model,
+      model,
+      ...(this.config.lightMode && tools === 'full' ? { maxTokens: 2500 } : {}),
       initializeTimeoutMs: 120_000,
       requestTimeoutMs: this.config.agentTimeoutMs,
     })
     const slot: Slot = { harness, lastUsed: Date.now(), busy: false }
-    this.slots.set(agent.id, slot)
+    this.slots.set(key, slot)
     return slot
   }
 
@@ -150,9 +169,9 @@ export class AgentRuntimePool {
   }
 
   /** Run one prompt as a fresh dsh session of this agent. Calls for the same agent must be serialized by the caller. */
-  async run(agent: Agent, prompt: string): Promise<AgentRunResult> {
+  async run(agent: Agent, prompt: string, route: { model?: string; tools?: ToolProfile } = {}): Promise<AgentRunResult> {
     await this.acquire()
-    const slot = this.slotFor(agent)
+    const slot = this.slotFor(agent, route.model || this.config.model, route.tools ?? 'full')
     slot.busy = true
     let timer: NodeJS.Timeout | undefined
     try {
@@ -197,9 +216,9 @@ export class AgentRuntimePool {
   async resumeScheduled(agents: Agent[]): Promise<string[]> {
     const resumed: string[] = []
     for (const agent of agents) {
-      if (this.slots.has(agent.id) || !this.hasActiveSchedules(agent.id)) continue
+      if ([...this.slots.keys()].some((key) => key.startsWith(`${agent.id}:`)) || !this.hasActiveSchedules(agent.id)) continue
       try {
-        await this.slotFor(agent).harness.start()
+        await this.slotFor(agent, this.config.model, 'full').harness.start()
         resumed.push(agent.id)
       } catch {
         await this.close(agent.id)
@@ -209,19 +228,27 @@ export class AgentRuntimePool {
   }
 
   async close(agentId: string): Promise<void> {
-    const slot = this.slots.get(agentId)
-    if (!slot) return
-    this.slots.delete(agentId)
-    await slot.harness.close().catch(() => undefined)
+    const keys = [...this.slots.keys()].filter((key) => key.startsWith(`${agentId}:`) || key === agentId)
+    await Promise.all(keys.map(async (key) => {
+      const slot = this.slots.get(key)
+      this.slots.delete(key)
+      await slot?.harness.close().catch(() => undefined)
+    }))
   }
 
   private async sweep(): Promise<void> {
     const cutoff = Date.now() - this.config.agentIdleMs
-    for (const [id, slot] of this.slots) if (!slot.busy && slot.lastUsed < cutoff && !this.hasActiveSchedules(id)) await this.close(id)
+    const idle = new Set<string>()
+    for (const [key, slot] of this.slots) {
+      const agentId = key.split(':')[0]!
+      if (!slot.busy && slot.lastUsed < cutoff && !this.hasActiveSchedules(agentId)) idle.add(agentId)
+    }
+    for (const agentId of idle) await this.close(agentId)
   }
 
   async closeAll(): Promise<void> {
     clearInterval(this.sweeper)
-    await Promise.all([...this.slots.keys()].map((id) => this.close(id)))
+    const agentIds = new Set([...this.slots.keys()].map((key) => key.split(':')[0]!))
+    await Promise.all([...agentIds].map((id) => this.close(id)))
   }
 }

@@ -94,6 +94,8 @@ export const DEFAULT_SPECIALISTS: Array<{ name: string; specialty: string }> = [
 ]
 
 export class Domain {
+  /** Zero means unlimited. Light mode sets a discussion cap, an artifact cap, and skips pre-review. */
+  limits = { maxDiscussionsPerTask: 0, maxArtifactChars: 0, skipReviewSuggest: false }
   readonly db: Db
   readonly bus: Bus
   jobs: JobSink
@@ -534,6 +536,9 @@ export class Domain {
     const wait = this.scheduleWait(t)
     if (wait) throw new DomainError(`定时任务还没跑完（${wait.seen}/${wait.expected}），现在不要提交；全部执行后系统会叫你交付，请结束本轮`)
     if (!input.content.trim()) throw new DomainError('产物内容不能为空')
+    if (this.limits.maxArtifactChars > 0 && input.content.length > this.limits.maxArtifactChars) {
+      input = { ...input, content: `${input.content.slice(0, this.limits.maxArtifactChars)}\n\n（轻量模式已截断）` }
+    }
     const prev = this.db.get<{ v: number }>('SELECT MAX(version) AS v FROM artifacts WHERE task_id = ?', t.id)
     const artifact = {
       id: newId('ar'), space_id: t.space_id, task_id: t.id, title: input.title.trim() || t.title, kind: input.kind || '文档',
@@ -559,7 +564,7 @@ export class Domain {
     this.db.insert('artifacts', artifact)
     this.db.update('tasks', t.id, { status: 'review' , live: '已交付，等负责人确认', updated_at: now() })
     this.event(t.id, 'agent', agent.id, agent.name, `交付「${artifact.title}」v${artifact.version}，自检后交给负责人确认`)
-    if (t.owner_id) this.jobs.enqueue('review_suggest', this.personalAgent(t.owner_id).id, { taskId: t.id, artifactId: artifact.id })
+    if (t.owner_id && !this.limits.skipReviewSuggest) this.jobs.enqueue('review_suggest', this.personalAgent(t.owner_id).id, { taskId: t.id, artifactId: artifact.id })
     this.touch(t.space_id)
     return artifact
   }
@@ -577,6 +582,10 @@ export class Domain {
     this.requireAgentInSpace(agent, t.space_id)
     const openCount = this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM discussions WHERE task_id = ? AND status != 'resolved'", t.id)
     if ((openCount?.n ?? 0) > 0) throw new DomainError('这个任务已经有一个进行中的讨论')
+    if (this.limits.maxDiscussionsPerTask > 0) {
+      const total = this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM discussions WHERE task_id = ?', t.id)
+      if ((total?.n ?? 0) >= this.limits.maxDiscussionsPerTask) throw new DomainError('这个任务的讨论次数已经用完。请按已有信息选定一个可执行的做法，直接提交产物，不要再发起讨论。')
+    }
     const userIds = new Set(input.participant_user_ids ?? [])
     if (t.owner_id) userIds.add(t.owner_id)
     const participants = new Set<string>([agent.id])
@@ -930,17 +939,24 @@ export class Domain {
   }
 
   /** Shared space context given to every agent turn. */
-  spaceContext(spaceId: string): Record<string, unknown> {
+  spaceContext(spaceId: string, options: { brief?: boolean } = {}): Record<string, unknown> {
     const s = this.space(spaceId)
-    return {
+    const members = this.members(spaceId).filter((m) => m.left_at === null).map((m) => ({
+      user_id: m.id, name: m.name, title: m.title,
+      public_profile: options.brief ? String(m.public_profile || '').slice(0, 160) : String(m.public_profile || ''),
+    }))
+    const context: Record<string, unknown> = {
       space: { id: s.id, name: s.name, owner_user_id: s.owner_id, goal: s.goal_title ? { title: s.goal_title, due: s.goal_due, metrics: parseJson(s.goal_metrics, []) } : null },
-      members: this.members(spaceId).filter((m) => m.left_at === null).map((m) => ({ user_id: m.id, name: m.name, title: m.title, public_profile: m.public_profile || '' })),
+      members,
       specialists: this.spaceAgents(spaceId).filter((a) => a.kind === 'specialist').map((a) => ({ agent_id: a.id, name: a.name, specialty: a.specialty })),
       standards: this.standards(spaceId, true).map((st) => ({ id: st.id, text: st.text, scope: st.scope })),
-      recent_memory: this.db.all<{ text: string; created_at: number }>('SELECT text, created_at FROM memory WHERE space_id = ? ORDER BY created_at DESC LIMIT 20', spaceId).map((m) => ({ text: m.text, date: new Date(m.created_at).toISOString().slice(0, 10) })),
-      files: this.db.all('SELECT id, name, source FROM files WHERE space_id = ? ORDER BY created_at DESC', spaceId),
-      skills: this.db.all('SELECT id, name, description FROM skills WHERE space_id = ? ORDER BY uses DESC', spaceId),
+      recent_memory: this.db.all<{ text: string; created_at: number }>(`SELECT text, created_at FROM memory WHERE space_id = ? ORDER BY created_at DESC LIMIT ${options.brief ? 6 : 20}`, spaceId).map((m) => ({ text: m.text, date: new Date(m.created_at).toISOString().slice(0, 10) })),
     }
+    if (!options.brief) {
+      context.files = this.db.all('SELECT id, name, source FROM files WHERE space_id = ? ORDER BY created_at DESC', spaceId)
+      context.skills = this.db.all('SELECT id, name, description FROM skills WHERE space_id = ? ORDER BY uses DESC', spaceId)
+    }
+    return context
   }
 
   taskView(taskId: string): Record<string, unknown> {

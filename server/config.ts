@@ -25,6 +25,10 @@ export interface ModelSettings {
   /** Environment variable name the harness reads. Never the key itself. */
   apiKeyEnv: string
   modelRoute: ModelRoute
+  /** Model for short jobs. Falls back to `model` when MODEL_LIGHT_NAME is unset. */
+  lightModel: string
+  /** Shorter real-model runs: no pre-review, one discussion per task, shorter artifacts. */
+  lightMode: boolean
 }
 
 const DEEPSEEK_PROVIDER = 'deepseek-official'
@@ -84,7 +88,12 @@ export function resolveModelSettings(env: NodeJS.ProcessEnv): ModelSettings {
 
   const model = modelName ?? legacyModel ?? (modelRoute === 'deepseek' ? 'deepseek-flash' : '')
   const apiKeyEnv = modelApiKey ? 'MODEL_API_KEY' : 'DEEPSEEK_API_KEY'
-  return { provider, model, modelBaseUrl, apiKeyEnv, modelRoute }
+  const lightFlag = (env.LIGHT_MODE ?? '').trim().toLowerCase()
+  return {
+    provider, model, modelBaseUrl, apiKeyEnv, modelRoute,
+    lightModel: nonEmpty(env, 'MODEL_LIGHT_NAME') ?? model,
+    lightMode: lightFlag === '1' || lightFlag === 'true' || lightFlag === 'yes' || lightFlag === 'on',
+  }
 }
 
 /** Boot-time message when the process cannot call a model. Null when configuration is usable or demo mode will supply one. */
@@ -144,6 +153,8 @@ export interface Config {
   webDist: string
   /** Scripted model and seeded space, instead of a configured provider. */
   demoMode: boolean
+  lightModel: string
+  lightMode: boolean
 }
 
 export function loadConfig(overrides: Partial<Config> = {}, env: NodeJS.ProcessEnv = process.env): Config {
@@ -166,6 +177,8 @@ export function loadConfig(overrides: Partial<Config> = {}, env: NodeJS.ProcessE
     maxConcurrentAgents: Number(readEnv(env, 'MAX_CONCURRENT_AGENTS', '4')),
     webDist: resolve(readEnv(env, 'WEB_DIST', './dist')),
     demoMode: demoModeFromEnv(env),
+    lightModel: model.lightModel,
+    lightMode: model.lightMode,
   }
   return { ...base, ...overrides }
 }

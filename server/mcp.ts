@@ -28,15 +28,6 @@ export function buildMcpServer(domain: Domain, agent: Agent): McpServer {
     instructions: 'Agent 空间的工具。所有对空间的修改都必须通过这些工具完成；工具返回错误时，按错误信息调整后重试或说明原因。',
   })
 
-  server.registerTool('get_task', {
-    description: '读取一个任务的完整信息：要求、验收标准、过程记录、最新产物。',
-    inputSchema: { task_id: z.string() },
-  }, guard(({ task_id }: { task_id: string }) => {
-    const t = domain.task(task_id)
-    domain.requireAgentInSpace(agent, t.space_id)
-    return domain.taskView(task_id)
-  }))
-
   server.registerTool('get_discussion', {
     description: '读取一个讨论的问题、参与者和全部发言。',
     inputSchema: { discussion_id: z.string() },

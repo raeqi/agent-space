@@ -43,6 +43,7 @@ if (config.demoMode) {
   config.modelRoute = 'deepseek'
   config.provider = 'deepseek-official'
   config.model = 'demo'
+  config.lightModel = 'demo'
   config.modelBaseUrl = scripted.url
   config.apiKeyEnv = 'DEEPSEEK_API_KEY'
   if (!process.env.DEEPSEEK_API_KEY) process.env.DEEPSEEK_API_KEY = 'sk-demo'

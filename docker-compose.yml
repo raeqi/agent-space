@@ -8,6 +8,8 @@ services:
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_BASE_URL: ${MODEL_BASE_URL:-}
       MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_LIGHT_NAME: ${MODEL_LIGHT_NAME:-}
+      LIGHT_MODE: ${LIGHT_MODE:-}
       DEMO_MODE: ${DEMO_MODE:-}
       # 旧变量仍传入。只配置了 DEEPSEEK_API_KEY 的部署不用改。
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}

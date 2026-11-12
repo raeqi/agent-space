@@ -46,7 +46,7 @@ npm start
 | 通义千问 / DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.5-air` |
 
-DeepSeek 用 `deepseek-v4-pro`。`deepseek-flash` 更快、更便宜。`deepseek-chat` 是旧别名，请求会落到 flash。
+DeepSeek 用 `deepseek-v4-pro` 写长文档，短回复另填 `MODEL_LIGHT_NAME=deepseek-flash`（更快、更便宜）。`deepseek-chat` 是旧别名，请求会落到 flash。想在大约两分钟内走完真实模型的整条流程，再设 `LIGHT_MODE=1`：跳过个人 agent 预审，每个任务最多一次讨论，产物限在约两千字。一次真实执行里，长文档占了大部分时间和费用；执行 agent 现在直接提交产物，不再先写进本地文件再贴一遍。
 
 `COOKIE_SECRET` 在演示模式可以不填，程序会在数据目录生成一把并记住。接上真实模型、给别人用时再改成你自己的随机字符串。
 
@@ -173,7 +173,9 @@ DATA_DIR=./data-demo npm start
 |---|---|---|
 | `MODEL_API_KEY` | 空 | 留空进入演示模式。要真实模型时，和下面两项一起填 |
 | `MODEL_BASE_URL` | 空 | OpenAI 兼容接口地址 |
-| `MODEL_NAME` | 空 | 模型名 |
+| `MODEL_NAME` | 空 | 长文档用的模型名。DeepSeek 用 `deepseek-v4-pro` |
+| `MODEL_LIGHT_NAME` | 与 `MODEL_NAME` 相同 | 整理、讨论、预审等短回复。DeepSeek 用 `deepseek-flash` |
+| `LIGHT_MODE` | 关 | 设为 `1` 时跳过预审、每个任务最多一次讨论、产物更短 |
 | `MODEL_PROVIDER` | 空 | 一般留空。不填 base URL 时，用来选择 harness 内置供应商 |
 | `DEMO_MODE` | 空 | 设为 `1` 时，即使填了 key 也用脚本回复 |
 | `COOKIE_SECRET` | 演示模式自动生成 | 生产环境必须修改 |
