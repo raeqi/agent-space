@@ -21,6 +21,39 @@ function yamlString(value: string): string {
   return JSON.stringify(value)
 }
 
+/**
+ * Cordis patch rows that select the model route. A custom base URL is declared as
+ * OpenAI Chat Completions: the harness treats an unrecognized URL as OpenAI itself,
+ * and the two compat switches below are the ones typical compatible gateways reject.
+ */
+export function modelPluginPatch(config: Config): string[] {
+  if (config.modelRoute === 'deepseek') {
+    if (!config.modelBaseUrl) return []
+    return ['- id: llm-deepseek', '  config:', `    baseURL: ${yamlString(config.modelBaseUrl)}`]
+  }
+  const lines = [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    `      ${config.provider}:`,
+    `        apiKeyEnv: ${yamlString(config.apiKeyEnv)}`,
+  ]
+  if (config.modelRoute === 'catalog') {
+    if (config.modelBaseUrl) lines.push(`        baseURL: ${yamlString(config.modelBaseUrl)}`)
+    return lines
+  }
+  lines.push(
+    '        api: openai-completions',
+    `        baseURL: ${yamlString(config.modelBaseUrl)}`,
+    '        compat:',
+    '          supportsDeveloperRole: false',
+    '          maxTokensField: max_tokens',
+    '        models:',
+    `          - id: ${yamlString(config.model)}`,
+  )
+  return lines
+}
+
 function persona(agent: Agent): string {
   switch (agent.kind) {
     case 'assistant':
@@ -45,6 +78,11 @@ export class AgentRuntimePool {
 
   constructor(config: Config) {
     this.config = config
+    // The official DeepSeek adapter reads DEEPSEEK_API_KEY. Mirror the generic key so a
+    // legacy route keeps working, including the harness web-search credential.
+    if (config.modelRoute === 'deepseek' && config.apiKeyEnv === 'MODEL_API_KEY' && process.env.MODEL_API_KEY) {
+      process.env.DEEPSEEK_API_KEY = process.env.MODEL_API_KEY
+    }
     this.sweeper = setInterval(() => void this.sweep(), 60_000)
     this.sweeper.unref()
   }
@@ -58,10 +96,7 @@ export class AgentRuntimePool {
     const p = this.paths(agent)
     mkdirSync(p.home, { recursive: true })
     mkdirSync(p.workspace, { recursive: true })
-    const lines: string[] = []
-    if (this.config.modelBaseUrl) {
-      lines.push('- id: llm-deepseek', '  config:', `    baseURL: ${yamlString(this.config.modelBaseUrl)}`)
-    }
+    const lines = modelPluginPatch(this.config)
     lines.push('- id: system-prompt', '  config:', `    personaPrefix: ${yamlString(persona(agent))}`)
     lines.push(
       '- insert:',

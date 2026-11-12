@@ -4,10 +4,15 @@ services:
     ports:
       - "8787:8787"
     environment:
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_NAME: ${MODEL_NAME:-}
+      # 旧变量仍传入。只配置了 DEEPSEEK_API_KEY 的部署不用改。
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DSH_MODEL: ${DSH_MODEL:-}
+      DSH_PROVIDER: ${DSH_PROVIDER:-}
       COOKIE_SECRET: ${COOKIE_SECRET:-change-me-to-a-long-random-string}
       ACCESS_CODE: ${ACCESS_CODE:-}
-      DSH_MODEL: ${DSH_MODEL:-deepseek-flash}
     volumes:
       - agent-space-data:/data
     restart: unless-stopped

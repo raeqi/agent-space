@@ -1,4 +1,4 @@
-import { loadConfig } from './config.ts'
+import { legacyModelConfigWarning, loadConfig, modelConfigProblem } from './config.ts'
 import { createApp } from './app.ts'
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
@@ -16,10 +16,13 @@ try {
 
 const config = loadConfig()
 
-if (!process.env.DEEPSEEK_API_KEY && !config.modelBaseUrl) {
-  console.error('[agent-space] 请复制 .env.example 为 .env，填写你自己的 DEEPSEEK_API_KEY。项目不提供共享密钥。')
+const modelProblem = modelConfigProblem(config, process.env)
+if (modelProblem) {
+  console.error(modelProblem)
   process.exit(1)
 }
+const legacyModels = legacyModelConfigWarning(process.env)
+if (legacyModels) console.warn(legacyModels)
 if (config.cookieSecret.startsWith('dev-only')) {
   console.warn('[agent-space] COOKIE_SECRET 使用的是开发默认值，生产环境请设置。')
 }

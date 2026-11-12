@@ -76,15 +76,33 @@
 
 当前版本由部署者在服务端配置模型密钥，页面尚不支持每位用户分别填写自己的 key。运行这个实例产生的模型调用费用，由服务端配置的密钥所属账户承担。
 
-首次本地运行：
+密钥放在项目根目录的 `.env`，不绑定某一家服务商。对方只要提供 OpenAI 兼容的 Chat Completions 接口，就填写 key、base URL 和模型名。`.env` 已被 Git 忽略。真实 key 只留在这一个文件里，不要写进源码、截图、共享文档或提交到仓库。
 
 1. 将 `.env.example` 复制为 `.env`。
-2. 在 `.env` 的 `DEEPSEEK_API_KEY=` 后填入你自己申请的 API key，并设置 `COOKIE_SECRET`。
-3. 重新启动服务。若提示缺少 key，检查 `.env` 是否在项目根目录、值是否为空。
+2. 在 `MODEL_API_KEY=` 后面填入你自己申请的 API key。
+3. 填写 `MODEL_BASE_URL` 和 `MODEL_NAME`。base URL 停在版本前缀，一般以 `/v1` 结尾。
+4. 设置 `COOKIE_SECRET`，然后启动服务。换 key 或换模型后也要重启。
 
-`.env` 已被 Git 忽略。不要把真实 key 写进源码、截图、共享文档或提交到仓库。换 key 后也需要重启服务。
+启动时如果提示缺少配置，检查 `.env` 是否在项目根目录、这三个值是否为空。
 
-Kimi 配置入口尚未接通，当前启动检查仍要求默认服务的 key；不要仅把 Kimi key 填入 `DEEPSEEK_API_KEY`，两者不能互换。后续提供模型选择、密钥输入和连接测试后，再补充相应操作步骤。
+常见组合如下。模型名以各服务商控制台为准：
+
+| 服务 | `MODEL_BASE_URL` | `MODEL_NAME` 示例 |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4.1` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| Kimi / Moonshot（国内） | `https://api.moonshot.cn/v1` | `kimi-k2` |
+| Kimi / Moonshot（国际） | `https://api.moonshot.ai/v1` | `kimi-k2` |
+| 通义千问 / DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.5-air` |
+
+自定义 base URL 会按 OpenAI 兼容接口连接，一般只填上面三个变量。`MODEL_PROVIDER` 可以不写；只有在使用 harness 自带的供应商目录、并且不填 `MODEL_BASE_URL` 时才需要它，例如 `openai`、`moonshotai`、`anthropic`。
+
+### 从旧变量迁移
+
+只配置了 `DEEPSEEK_API_KEY` 的旧 `.env` 可以继续用，服务仍走 DeepSeek 官方接口，模型默认 `deepseek-flash`。这时 `MODEL_BASE_URL` 的含义和以前一样：它覆盖 DeepSeek 的 Anthropic Messages 地址（测试里的脚本化模型也走这条路径）。
+
+建议改成 `MODEL_API_KEY`、`MODEL_BASE_URL`、`MODEL_NAME` 后重启。一旦设置了 `MODEL_API_KEY` 或 `MODEL_NAME`，同一个 `MODEL_BASE_URL` 就按 OpenAI Chat Completions 调用；DeepSeek 请改用上表里的 `https://api.deepseek.com/v1`。`DSH_MODEL` 在 `MODEL_NAME` 未设置时仍作为模型名。`DSH_PROVIDER` 只在没有这些新变量时生效。启动时如果仍在读旧变量，会打一行提示。
 
 ## 本地运行与开发
 
@@ -96,7 +114,7 @@ Kimi 配置入口尚未接通，当前启动检查仍要求默认服务的 key�
 需要 Node.js 24.9 或更高版本。每位部署者必须配置自己的模型 API key，项目不附带个人密钥。
 
 ```sh
-cp .env.example .env    # 填入 DEEPSEEK_API_KEY 和 COOKIE_SECRET
+cp .env.example .env    # 填入 MODEL_API_KEY、MODEL_BASE_URL、MODEL_NAME 和 COOKIE_SECRET
 npm install
 npm run build
 npm start               # http://localhost:8787
@@ -105,7 +123,7 @@ npm start               # http://localhost:8787
 用 Docker：
 
 ```sh
-DEEPSEEK_API_KEY=sk-... COOKIE_SECRET=$(openssl rand -hex 32) docker compose up -d
+MODEL_API_KEY=sk-... MODEL_BASE_URL=https://api.openai.com/v1 MODEL_NAME=gpt-4.1 COOKIE_SECRET=$(openssl rand -hex 32) docker compose up -d
 ```
 
 想先看看效果，可以先写入演示数据：四个空间、六个人，任务、讨论、待处理、标准、记忆、Skills 和资料都处在不同状态。数据只会写进空库：
@@ -124,12 +142,15 @@ DATA_DIR=./data-demo npm start
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | — | 必填 |
+| `MODEL_API_KEY` | — | 模型 API key，和下面两项一起填 |
+| `MODEL_BASE_URL` | 空 | OpenAI 兼容接口地址 |
+| `MODEL_NAME` | 空 | 模型名 |
+| `MODEL_PROVIDER` | 空 | 一般留空。不填 base URL 时，用来选择 harness 内置供应商 |
 | `COOKIE_SECRET` | 开发用默认值 | 生产环境必须修改 |
 | `ACCESS_CODE` | 空 | 登录访问码 |
-| `DSH_MODEL` | `deepseek-flash` | 所有 agent 用的模型 |
-| `DSH_PROVIDER` | `deepseek-official` | 模型服务路由 |
-| `MODEL_BASE_URL` | 空 | 覆盖 DeepSeek API 地址（测试时指向脚本化模型） |
+| `DEEPSEEK_API_KEY` | — | 旧变量。只设置它时仍走 DeepSeek 官方接口 |
+| `DSH_MODEL` | 旧部署为 `deepseek-flash` | 旧变量。`MODEL_NAME` 未设置时作为模型名 |
+| `DSH_PROVIDER` | 旧部署为 `deepseek-official` | 旧变量。没有新的 `MODEL_API_KEY` / `MODEL_NAME` / `MODEL_PROVIDER` 时才生效 |
 | `PORT` / `HOST` | `8787` / `0.0.0.0` | |
 | `INTERNAL_URL` | `http://127.0.0.1:$PORT` | agent 访问本服务 MCP 端点用的地址 |
 | `DATA_DIR` | `./data` | 数据库和运行目录 |
