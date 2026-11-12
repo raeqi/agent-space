@@ -243,7 +243,15 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
       artifacts: db.all('SELECT * FROM artifacts WHERE task_id = ? ORDER BY version DESC', t.id).map((a) => ({ ...a, self_check: parseJson(a.self_check, []) })),
       discussions: db.all(`SELECT d.id, d.title, d.status, d.outcome, d.escalate_why, u.name AS decider_name FROM discussions d LEFT JOIN users u ON u.id = d.decider_user_id WHERE d.task_id = ? ORDER BY d.created_at DESC`, t.id),
       judgment: db.get("SELECT * FROM judgments WHERE kind = 'confirm' AND ref_id = ? AND status = 'open'", t.id) ?? null,
+      canRetry: t.status === 'in_progress' && !t.blocked_by_discussion && !domain.scheduleWait(t) && !!t.executor_agent_id
+        && !db.get("SELECT 1 FROM jobs WHERE kind = 'execute' AND status IN ('queued','running') AND json_extract(payload, '$.taskId') = ?", t.id)
+        && !!db.get("SELECT 1 FROM jobs WHERE kind = 'execute' AND status = 'failed' AND json_extract(payload, '$.taskId') = ?", t.id),
     }
+  })
+
+  app.post('/api/tasks/:id/retry', { preHandler: auth }, async (req) => {
+    domain.retryExecute(me(req).id, task(req).id)
+    return { ok: true }
   })
 
   app.post('/api/tasks/:id/claim', { preHandler: auth }, async (req) => {

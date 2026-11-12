@@ -41,6 +41,16 @@ export function runOptionsForJob(config: Config, kind: string): { model: string;
   return { model: config.lightModel || config.model, tools: 'space' }
 }
 
+/**
+ * Output cap passed to the harness for an execute runtime.
+ * Light mode does not set a small cap: reasoning models spend it before submit_artifact.
+ * EXECUTE_MAX_TOKENS applies only when it is at least 16000.
+ */
+export function executeHarnessMaxTokens(config: Config, tools: ToolProfile): number | undefined {
+  if (tools !== 'full') return undefined
+  return config.executeMaxTokens ?? undefined
+}
+
 export function modelPluginPatch(config: Config, model = config.model): string[] {
   if (config.modelRoute === 'deepseek') {
     if (!config.modelBaseUrl) return []
@@ -138,6 +148,7 @@ export class AgentRuntimePool {
     if (existing) return existing
     const p = this.paths(agent, model, tools)
     const patch = this.writePatch(agent, model, tools)
+    const maxTokens = executeHarnessMaxTokens(this.config, tools)
     const harness = new DeepSeekHarness({
       profile: 'sdk',
       dshHome: p.home,
@@ -145,7 +156,7 @@ export class AgentRuntimePool {
       cwd: p.workspace,
       provider: this.config.provider,
       model,
-      ...(this.config.lightMode && tools === 'full' ? { maxTokens: 2500 } : {}),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
       initializeTimeoutMs: 120_000,
       requestTimeoutMs: this.config.agentTimeoutMs,
     })

@@ -16,6 +16,14 @@ interface JobRow {
 
 const MAX_ATTEMPTS = 2
 
+/** What to record when the model turn ended without the expected tool effect. */
+export function describeMissingEffect(kind: string, finishReason: string | null, finalResponse: string): string {
+  if (kind === 'execute' && (finishReason === 'max-tokens' || (finishReason ?? '').includes('max-tokens'))) {
+    return '模型在调用 submit_artifact 之前达到输出上限（max-tokens），产物没有提交。负责人可以重新执行。'
+  }
+  return `agent 没有完成预期操作（${finishReason ?? 'unknown'}）：${finalResponse.slice(0, 300)}`
+}
+
 const ACTIVITY: Record<JobKind, string> = {
   triage: '整理新任务',
   execute: '执行任务',
@@ -125,7 +133,7 @@ export class JobRunner implements JobSink {
       const prompt = buildPrompt(d, job.kind, agent.id, payload, { lightMode: this.pool.config.lightMode })
       const result = await this.pool.run(agent, prompt, runOptionsForJob(this.pool.config, job.kind))
       this.db.update('jobs', job.id, { dsh_session_id: result.sessionId })
-      if (!this.effectHappened(job.kind, payload, job.agent_id)) error = `agent 没有完成预期操作（${result.finishReason ?? 'unknown'}）：${result.finalResponse.slice(0, 300)}`
+      if (!this.effectHappened(job.kind, payload, job.agent_id)) error = describeMissingEffect(job.kind, result.finishReason, result.finalResponse)
     } catch (e) {
       error = (e as Error).message
     } finally {
@@ -205,8 +213,9 @@ export class JobRunner implements JobSink {
       }
       case 'execute': {
         const t = d.task(String(p.taskId))
-        d.db.update('tasks', t.id, { live: '执行 agent 没能完成，需要人处理', updated_at: now() })
-        d.event(t.id, 'system', null, '空间', `执行失败，已停止自动重试。原因：${short}`)
+        const hitCap = error.includes('max-tokens')
+        d.db.update('tasks', t.id, { live: hitCap ? '输出到上限，产物还没提交。负责人可以重新执行。' : '执行 agent 没能完成，需要人处理', updated_at: now() })
+        d.event(t.id, 'system', null, '空间', hitCap ? '执行停在输出上限（max-tokens），产物没有提交。负责人可以重新执行。' : `执行失败，已停止自动重试。原因：${short}`)
         d.touch(t.space_id)
         return
       }

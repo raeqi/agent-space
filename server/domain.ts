@@ -446,6 +446,24 @@ export class Domain {
     return this.task(t.id)
   }
 
+  /** Re-queue a stuck execute after the model stopped before submit_artifact. */
+  retryExecute(userId: string, taskId: string): void {
+    const t = this.task(taskId)
+    this.requireMember(t.space_id, userId)
+    const space = this.space(t.space_id)
+    if (userId !== t.owner_id && userId !== space.owner_id) throw new DomainError('只有负责人或空间 owner 可以重新执行', 403)
+    if (t.status !== 'in_progress' || t.blocked_by_discussion || this.scheduleWait(t)) throw new DomainError('这个任务现在不能重新执行')
+    if (!t.executor_agent_id) throw new DomainError('还没有执行 agent')
+    const pending = this.db.get("SELECT 1 FROM jobs WHERE kind = 'execute' AND status IN ('queued','running') AND json_extract(payload, '$.taskId') = ?", t.id)
+    if (pending) throw new DomainError('执行已经在进行')
+    const failed = this.db.get("SELECT 1 FROM jobs WHERE kind = 'execute' AND status = 'failed' AND json_extract(payload, '$.taskId') = ?", t.id)
+    if (!failed) throw new DomainError('没有失败的执行可以重试')
+    this.event(t.id, 'user', userId, this.user(userId).name, '重新执行')
+    this.db.update('tasks', t.id, { live: 'agent 准备重新执行', updated_at: now() })
+    this.jobs.enqueue('execute', t.executor_agent_id, { taskId: t.id })
+    this.touch(t.space_id)
+  }
+
   claimTask(taskId: string, userId: string, executorAgentId?: string): Task {
     const t = this.task(taskId)
     this.requireMember(t.space_id, userId)
@@ -565,6 +583,13 @@ export class Domain {
     this.db.update('tasks', t.id, { status: 'review' , live: '已交付，等负责人确认', updated_at: now() })
     this.event(t.id, 'agent', agent.id, agent.name, `交付「${artifact.title}」v${artifact.version}，自检后交给负责人确认`)
     if (t.owner_id && !this.limits.skipReviewSuggest) this.jobs.enqueue('review_suggest', this.personalAgent(t.owner_id).id, { taskId: t.id, artifactId: artifact.id })
+    if (t.owner_id && this.limits.skipReviewSuggest && !this.db.get("SELECT 1 FROM judgments WHERE kind = 'confirm' AND ref_id = ? AND status = 'open'", t.id)) {
+      this.db.insert('judgments', {
+        id: newId('j'), space_id: t.space_id, user_id: t.owner_id, kind: 'confirm', ref_id: t.id, title: artifact.title,
+        suggestion: '', suggested_action: '', basis: '轻量模式不跑个人 agent 预审，请直接查看交付后通过或打回', created_at: now(),
+      })
+      this.bus.publish(`user:${t.owner_id}`, { type: 'judgments' })
+    }
     this.touch(t.space_id)
     return artifact
   }

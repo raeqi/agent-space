@@ -140,6 +140,9 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
       {t.status === 'unclaimed' && (
         <div className="row"><button className="btn primary" onClick={() => void claim()}>由我负责，交给 agent 执行</button></div>
       )}
+      {data.canRetry && (t.owner_id === me.user.id || space?.space?.owner_id === me.user.id) && (
+        <div className="row"><button className="btn primary" onClick={() => void api('POST', `/api/tasks/${t.id}/retry`).then(reload)}>重新执行</button></div>
+      )}
       {/* The deliverable stays compact: title, a one-line summary, and the full text and the agent's
           self-check against the acceptance criteria one click away. */}
       {latest && (() => {

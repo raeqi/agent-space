@@ -5,7 +5,8 @@ import { Bus } from '../server/bus.ts'
 import { Domain } from '../server/domain.ts'
 import { loadConfig } from '../server/config.ts'
 import { buildPrompt } from '../server/agents/prompts.ts'
-import { runOptionsForJob } from '../server/agents/runtime.ts'
+import { executeHarnessMaxTokens, runOptionsForJob } from '../server/agents/runtime.ts'
+import { describeMissingEffect } from '../server/jobs.ts'
 
 test('short jobs use the light model and space tools; execute keeps the main model', () => {
   const config = loadConfig({}, {
@@ -19,10 +20,16 @@ test('short jobs use the light model and space tools; execute keeps the main mod
   }
   const same = loadConfig({}, { MODEL_API_KEY: 'sk', MODEL_BASE_URL: 'https://api.deepseek.com', MODEL_NAME: 'deepseek-v4-pro' })
   assert.equal(same.lightModel, 'deepseek-v4-pro')
-  assert.equal(loadConfig({}, { LIGHT_MODE: '1', MODEL_API_KEY: 'sk', MODEL_BASE_URL: 'https://api.deepseek.com', MODEL_NAME: 'deepseek-v4-pro' }).lightMode, true)
+  const light = loadConfig({}, { LIGHT_MODE: '1', MODEL_API_KEY: 'sk', MODEL_BASE_URL: 'https://api.deepseek.com', MODEL_NAME: 'deepseek-v4-pro' })
+  assert.equal(light.lightMode, true)
+  assert.equal(executeHarnessMaxTokens(light, 'full'), undefined)
+  assert.equal(executeHarnessMaxTokens(loadConfig({}, { LIGHT_MODE: '1', EXECUTE_MAX_TOKENS: '2500', MODEL_API_KEY: 'sk', MODEL_BASE_URL: 'https://api.deepseek.com', MODEL_NAME: 'deepseek-v4-pro' }), 'full'), undefined)
+  assert.equal(executeHarnessMaxTokens(loadConfig({}, { EXECUTE_MAX_TOKENS: '16000', MODEL_API_KEY: 'sk', MODEL_BASE_URL: 'https://api.deepseek.com', MODEL_NAME: 'deepseek-v4-pro' }), 'full'), 16000)
+  assert.match(describeMissingEffect('execute', 'max-tokens', ''), /submit_artifact/)
+  assert.match(describeMissingEffect('execute', 'max-tokens', ''), /重新执行/)
 })
 
-test('light mode allows one discussion, shortens the artifact, and skips pre-review', () => {
+test('light mode allows one discussion, shortens the artifact, and still asks the owner to confirm', () => {
   const db = new Db(':memory:')
   const queued: string[] = []
   const domain = new Domain(db, new Bus(), { enqueue(kind) { queued.push(kind) } })
@@ -41,6 +48,11 @@ test('light mode allows one discussion, shortens the artifact, and skips pre-rev
   assert.match(String(artifact.content), /轻量模式已截断/)
   assert.equal(String(artifact.content).startsWith('一二三四五六七八九十'), true)
   assert.equal(queued.includes('review_suggest'), false)
+  const judgment = db.get<{ kind: string; user_id: string; suggestion: string; status: string }>('SELECT kind, user_id, suggestion, status FROM judgments WHERE ref_id = ?', task.id)
+  assert.equal(judgment?.kind, 'confirm')
+  assert.equal(judgment?.user_id, user.id)
+  assert.equal(judgment?.status, 'open')
+  assert.equal(judgment?.suggestion, '')
   const prompt = buildPrompt(domain, 'execute', executor.id, { taskId: task.id }, { lightMode: true })
   assert.match(prompt, /不要用 write/)
   assert.doesNotMatch(prompt, /先用 mcp__space__post_progress/)
