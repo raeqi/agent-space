@@ -18,7 +18,9 @@ function JudgmentCard({ j, first, onDone }: { j: any; first: boolean; onDone: ()
         <span className="row"><Tag>{j.kind === 'confirm' ? '确认' : '定夺'}</Tag><Link to={j.link} style={{ fontWeight: 500, textDecoration: 'none' }}>{j.title}</Link></span>
         <span className="small muted">{j.space_name}</span>
       </div>
-      {j.kind === 'decide' && j.summary && <p className="sm sub">{<CompactText text={j.summary} />}</p>}
+      {j.kind === 'decide' && j.role === 'watch' && <p className="sm sub">定夺交给{j.decider_name || '任务负责人'}。{j.escalate_why}</p>}
+      {j.kind === 'decide' && j.role !== 'watch' && j.summary && <p className="sm sub">{<CompactText text={j.summary} />}</p>}
+      {j.kind === 'decide' && j.role !== 'watch' && j.escalate_why && <p className="small muted">{j.escalate_why}</p>}
       <div className="row wrap sm">
         {j.suggestion ? <span>建议{j.kind === 'confirm' ? (j.suggested_action === 'pass' ? '通过' : '打回') : ''}：{<CompactText text={suggestion} limit={120} />}</span> : <span className="muted">agent 没有给出建议</span>}
         {j.basis && <span className="small muted">依据：{<CompactText text={j.basis} />}</span>}

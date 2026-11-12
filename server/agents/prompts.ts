@@ -63,7 +63,7 @@ ${TOOL_RULE}`, { ...domain.spaceContext(d.space_id), discussion: domain.discussi
       return frame(kind, `
 你是讨论的组织者。读完所有发言后二选一：
 - 分歧在 agent 能定的范围内（纯技术、措辞、格式等，且有团队标准或明显更优解）：调用 mcp__space__resolve_discussion 写下结论，结论会写回任务。
-- 涉及目标、截止日期、资源投入、体验和工期取舍，或者发言方立场冲突且没有标准可依：调用 mcp__space__escalate_discussion，用一句话提炼分歧点并列出 2 到 3 个方案，交给 owner 定夺。
+- 涉及目标、截止日期、资源投入、体验和工期取舍，或者发言方立场冲突且没有标准可依：调用 mcp__space__escalate_discussion，用一句话提炼分歧点并列出 2 到 3 个方案。定夺会交给任务负责人；没有负责人时交给空间 owner。立场不同的成员会看到。
 ${TOOL_RULE}`, { ...domain.spaceContext(d.space_id), discussion: domain.discussionView(d.id), task: d.task_id ? domain.taskView(d.task_id) : null })
     }
     case 'plan': {
@@ -78,10 +78,13 @@ ${TOOL_RULE}`, { ...domain.spaceContext(s.id), existing_tasks: tasks, today: new
     }
     case 'decide_suggest': {
       const d = domain.discussion(String(payload.discussionId))
+      const decides = payload.decides !== false
       return frame(kind, `
-一个分歧被交给你的主人（空间 owner）定夺。请以 owner 的名义给出建议结论，调用 mcp__space__suggest_decision 一次。
+${decides
+    ? '一个分歧被交给你的主人定夺（任务负责人；没有负责人时是空间 owner）。请给出建议结论，调用 mcp__space__suggest_decision 一次。主人可以按建议定，也可以改判。'
+    : '一个分歧里，你的主人和别人立场不同。定夺的是任务负责人，不是你的主人。请仍给出建议，调用 mcp__space__suggest_decision 一次，供负责人参考。'}
 - 依据优先级：空间目标 > 团队标准 > 主人的判断手册 > 讨论里的理由。basis 里写清楚你依据的是哪一条。
-- choice 写成可以直接执行的结论。主人可以按建议定，也可以改判。
+- choice 写成可以直接执行的结论。如果讨论记录里有「撤销结论」，那条旧结论已经作废，不要再沿用。
 ${TOOL_RULE}`, { ...domain.spaceContext(d.space_id), discussion: domain.discussionView(d.id), options: parseJson(d.options as string, []), owner_handbook: agent.handbook || '（主人没有写判断手册）' })
     }
   }

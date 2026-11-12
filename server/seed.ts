@@ -124,9 +124,12 @@ export function seedDemo(db: Db): { spaces: number } {
   msg(d1, ag('开发 agent'), '动效要多 4 天，和回调重试占用同一段时间。', at(0, 8, 14))
   msg(d1, pa(people.zhou), '建议放二期，关键路径上已经有 2 天风险。', at(0, 8, 16))
   msg(d1, pa(people.su), '建议一期上，A/B 测试里第 3 步完成率高 3%。', at(0, 8, 18))
-  msg(d1, assistant, '总结：分歧在于用 4 天研发换 3% 转化，超出 agent 能定的范围，交给 owner 定夺。', at(0, 8, 22))
-  msg(d1, pa(people.lin), '以 owner 名义建议：动效放二期，交互主体一期上线。依据：团队标准「上线日期优先于体验增强」', at(0, 8, 40))
-  db.insert('judgments', { id: newId('j'), space_id: pay.id, user_id: people.lin.id, kind: 'decide', ref_id: d1, title: '动效放一期还是二期', suggestion: '动效放二期，交互主体一期上线', suggested_action: 'accept', basis: '团队标准「上线日期优先于体验增强」', created_at: at(0, 8, 40) })
+  const escalateWhy = '交给苏晴定夺，因为苏晴是任务「新手引导交互方案」的负责人。周远的个人 agent 在讨论里立场不同，周远也会看到并可以补充意见'
+  msg(d1, assistant, `总结：分歧在于用 4 天研发换 3% 转化，超出 agent 能定的范围。${escalateWhy}`, at(0, 8, 22))
+  msg(d1, pa(people.su), '以负责人名义建议：动效放二期，交互主体一期上线。依据：团队标准「上线日期优先于体验增强」', at(0, 8, 40))
+  db.update('discussions', d1, { decider_user_id: people.su.id, audience: JSON.stringify([people.su.id, people.zhou.id]), escalate_why: escalateWhy })
+  db.insert('judgments', { id: newId('j'), space_id: pay.id, user_id: people.su.id, kind: 'decide', role: 'decide', ref_id: d1, title: '动效放一期还是二期', suggestion: '动效放二期，交互主体一期上线', suggested_action: 'accept', basis: '团队标准「上线日期优先于体验增强」', created_at: at(0, 8, 40) })
+  db.insert('judgments', { id: newId('j'), space_id: pay.id, user_id: people.zhou.id, kind: 'decide', role: 'watch', ref_id: d1, title: '动效放一期还是二期', suggestion: '建议放二期，关键路径上已经有风险。', suggested_action: 'watch', basis: escalateWhy, created_at: at(0, 8, 41) })
 
   // in progress
   const retry = task(pay.id, { title: '回调重试', status: 'in_progress', owner: people.zhou, creator: people.zhou, exec: ag('开发 agent'), acceptance: ['超时自动重试 3 次', '幂等'], created: at(5, 9), live: '写重试逻辑，62%' })
@@ -250,7 +253,7 @@ export function seedDemo(db: Db): { spaces: number } {
   // ---------- work log for 林夏 ----------
   const log = (text: string, spaceId: string, basis: string, link: string, ts: number) =>
     db.insert('work_log', { id: newId('wl'), user_id: people.lin.id, agent_id: pa(people.lin).id, space_id: spaceId, text, basis, link, created_at: ts })
-  log('在讨论「动效放一期还是二期」里以 owner 名义给出建议', pay.id, '团队标准「上线日期优先于体验增强」', `/spaces/${pay.id}/discussions/${d1}`, at(0, 8, 40))
+  db.insert('work_log', { id: newId('wl'), user_id: people.su.id, agent_id: pa(people.su).id, space_id: pay.id, text: '在讨论「动效放一期还是二期」里以负责人名义给出建议', basis: '团队标准「上线日期优先于体验增强」', link: `/spaces/${pay.id}/discussions/${d1}`, created_at: at(0, 8, 40) })
   log('看了「发布说明 v1」的交付，建议打回', pay.id, '验收标准第 3 条', `/spaces/${pay.id}/tasks/${notes}`, at(0, 9, 8))
   log('看了「新手引导流失分析」的交付，建议通过', team.id, '团队标准「分析报告结论放第一页」', `/spaces/${team.id}/tasks/${funnel}`, at(0, 8))
   log('在讨论「FAQ 覆盖哪些失败码」里替你陈述立场', pay.id, '', `/spaces/${pay.id}/discussions/${d2}`, at(1, 16, 12))

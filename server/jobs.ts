@@ -152,7 +152,14 @@ export class JobRunner implements JobSink {
       case 'review_suggest': return d.task(String(p.taskId)).status === 'review' && !this.hasOpenJudgment('confirm', String(p.taskId))
       case 'discussion_reply':
       case 'discussion_moderate': return d.discussion(String(p.discussionId)).status === 'open'
-      case 'decide_suggest': return d.discussion(String(p.discussionId)).status === 'escalated' && !this.hasOpenJudgment('decide', String(p.discussionId))
+      case 'decide_suggest': {
+        const disc = d.discussion(String(p.discussionId))
+        if (disc.status !== 'escalated') return false
+        const uid = String(p.userId ?? '')
+        if (!uid) return !this.hasOpenJudgment('decide', disc.id)
+        const row = this.db.get<{ suggestion: string }>('SELECT suggestion FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', disc.id, uid, 'open')
+        return !row || !row.suggestion.trim()
+      }
       case 'plan': return !!d.space(String(p.spaceId)).goal_title
     }
   }
@@ -168,7 +175,14 @@ export class JobRunner implements JobSink {
         return (msgs?.n ?? 0) > 0 || d.discussion(String(p.discussionId)).status !== 'open'
       }
       case 'discussion_moderate': return d.discussion(String(p.discussionId)).status !== 'open'
-      case 'decide_suggest': return this.hasOpenJudgment('decide', String(p.discussionId)) || d.discussion(String(p.discussionId)).status !== 'escalated'
+      case 'decide_suggest': {
+        const disc = d.discussion(String(p.discussionId))
+        if (disc.status !== 'escalated') return true
+        const uid = String(p.userId ?? '')
+        if (!uid) return this.hasOpenJudgment('decide', disc.id)
+        const row = this.db.get<{ suggestion: string }>('SELECT suggestion FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', disc.id, uid, 'open')
+        return !!row && !!row.suggestion.trim()
+      }
       case 'plan': return !!this.db.get("SELECT 1 FROM tasks WHERE space_id = ? AND source = 'plan' AND created_at >= ?", String(p.spaceId), Number(p.since ?? 0))
     }
   }
@@ -208,7 +222,7 @@ export class JobRunner implements JobSink {
       case 'discussion_moderate': {
         const disc = d.discussion(String(p.discussionId))
         if (disc.status !== 'open') return
-        d.escalateDiscussion(d.assistantOf(disc.space_id), { discussion_id: disc.id, summary: `空间助理没能总结这次讨论（${short}），请 owner 直接看发言后定夺`, options: [] })
+        d.escalateDiscussion(d.assistantOf(disc.space_id), { discussion_id: disc.id, summary: `空间助理没能总结这次讨论（${short}），请负责人直接看发言后定夺`, options: [] })
         return
       }
       case 'plan':
@@ -217,11 +231,17 @@ export class JobRunner implements JobSink {
         return
       case 'decide_suggest': {
         const disc = d.discussion(String(p.discussionId))
-        if (this.hasOpenJudgment('decide', disc.id)) return
-        const s = d.space(disc.space_id)
-        d.db.insert('judgments', { id: newId('j'), space_id: s.id, user_id: s.owner_id, kind: 'decide', ref_id: disc.id, title: disc.title, suggestion: '', suggested_action: '', basis: '你的 agent 没能给出建议，请直接定夺', created_at: now() })
-        d.bus.publish(`user:${s.owner_id}`, { type: 'judgments' })
-        d.touch(s.id)
+        if (disc.status !== 'escalated') return
+        const uid = String(p.userId || disc.decider_user_id || d.space(disc.space_id).owner_id)
+        const existing = d.db.get<{ id: string; suggestion: string }>('SELECT id, suggestion FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', disc.id, uid, 'open')
+        if (existing) {
+          if (!existing.suggestion.trim()) d.db.update('judgments', existing.id, { basis: '你的 agent 没能给出建议，请直接看讨论后处理' })
+          d.bus.publish(`user:${uid}`, { type: 'judgments' })
+          return
+        }
+        d.db.insert('judgments', { id: newId('j'), space_id: disc.space_id, user_id: uid, kind: 'decide', ref_id: disc.id, title: disc.title, suggestion: '', suggested_action: '', basis: '你的 agent 没能给出建议，请直接定夺', role: 'decide', created_at: now() })
+        d.bus.publish(`user:${uid}`, { type: 'judgments' })
+        d.touch(disc.space_id)
         return
       }
     }

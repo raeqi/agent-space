@@ -91,15 +91,16 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
           const art = db.get('SELECT id, title, kind, version, content, self_check FROM artifacts WHERE task_id = ? ORDER BY version DESC LIMIT 1', j.ref_id)
           return { ...j, artifact: art ? { ...art, self_check: parseJson(art.self_check, []) } : null, link: `/spaces/${j.space_id}/tasks/${j.ref_id}` }
         }
-        const disc = db.get<{ summary: string; options: string }>('SELECT summary, options FROM discussions WHERE id = ?', j.ref_id)
-        return { ...j, summary: disc?.summary ?? '', options: parseJson(disc?.options, []), link: `/spaces/${j.space_id}/discussions/${j.ref_id}` }
+        const disc = db.get<{ summary: string; options: string; decider_user_id: string | null; escalate_why: string }>('SELECT summary, options, decider_user_id, escalate_why FROM discussions WHERE id = ?', j.ref_id)
+        const decider = disc?.decider_user_id ? db.get<{ name: string }>('SELECT name FROM users WHERE id = ?', disc.decider_user_id) : undefined
+        return { ...j, summary: disc?.summary ?? '', options: parseJson(disc?.options, []), escalate_why: disc?.escalate_why ?? '', decider_name: decider?.name ?? '', link: `/spaces/${j.space_id}/discussions/${j.ref_id}` }
       }),
     }
   })
 
   app.post('/api/judgments/:id', { preHandler: auth }, async (req) => {
     const b = (req.body ?? {}) as Body
-    const action = str(b.action) as 'pass' | 'reject' | 'accept' | 'override'
+    const action = str(b.action) as 'pass' | 'reject' | 'accept' | 'override' | 'comment'
     domain.resolveJudgment(me(req).id, (req.params as { id: string }).id, { action, reason: str(b.reason, 300), choice: str(b.choice, 1000), saveAsStandard: b.saveAsStandard === true, standardScope: str(b.standardScope, 20) })
     return { ok: true }
   })
@@ -240,7 +241,7 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
       task: { ...t, acceptance: parseJson(t.acceptance, []), owner_name: t.owner_id ? domain.user(t.owner_id).name : null, executor_name: t.executor_agent_id ? domain.agent(t.executor_agent_id).name : null },
       events: db.all('SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at', t.id),
       artifacts: db.all('SELECT * FROM artifacts WHERE task_id = ? ORDER BY version DESC', t.id).map((a) => ({ ...a, self_check: parseJson(a.self_check, []) })),
-      discussions: db.all('SELECT id, title, status, outcome FROM discussions WHERE task_id = ? ORDER BY created_at DESC', t.id),
+      discussions: db.all(`SELECT d.id, d.title, d.status, d.outcome, d.escalate_why, u.name AS decider_name FROM discussions d LEFT JOIN users u ON u.id = d.decider_user_id WHERE d.task_id = ? ORDER BY d.created_at DESC`, t.id),
       judgment: db.get("SELECT * FROM judgments WHERE kind = 'confirm' AND ref_id = ? AND status = 'open'", t.id) ?? null,
     }
   })
@@ -254,20 +255,32 @@ export function registerApi(app: FastifyInstance, config: Config, domain: Domain
 
   app.get('/api/spaces/:id/discussions', { preHandler: auth }, async (req) => {
     const id = space(req)
-    return { discussions: db.all(`SELECT d.id, d.title, d.status, d.outcome, d.task_id, d.created_at, a.name AS opened_by, t.title AS task_title
-      FROM discussions d LEFT JOIN agents a ON a.id = d.opened_by_agent_id LEFT JOIN tasks t ON t.id = d.task_id WHERE d.space_id = ? ORDER BY d.status = 'resolved', d.created_at DESC`, id) }
+    return { discussions: db.all(`SELECT d.id, d.title, d.status, d.outcome, d.escalate_why, d.task_id, d.created_at, a.name AS opened_by, t.title AS task_title, u.name AS decider_name
+      FROM discussions d LEFT JOIN agents a ON a.id = d.opened_by_agent_id LEFT JOIN tasks t ON t.id = d.task_id LEFT JOIN users u ON u.id = d.decider_user_id
+      WHERE d.space_id = ? ORDER BY d.status = 'resolved', d.created_at DESC`, id) }
   })
 
   app.get('/api/discussions/:id', { preHandler: auth }, async (req) => {
     const d = domain.discussion((req.params as { id: string }).id)
-    domain.requireMember(d.space_id, me(req).id)
+    const uid = me(req).id
+    domain.requireMember(d.space_id, uid)
+    const audienceIds = parseJson<string[]>(d.audience, [])
+    const audience = audienceIds.map((id) => ({ user_id: id, name: domain.user(id).name, role: id === d.decider_user_id ? 'decide' : 'watch' }))
     return {
-      discussion: { ...d, options: parseJson(d.options as string, []), writeback: parseJson(d.writeback as string, []) },
+      discussion: { ...d, options: parseJson(d.options, []), writeback: parseJson(d.writeback, []) },
       messages: db.all('SELECT * FROM discussion_messages WHERE discussion_id = ? ORDER BY created_at', d.id),
       participants: db.all('SELECT a.id, a.name, a.kind FROM discussion_participants p JOIN agents a ON a.id = p.agent_id WHERE p.discussion_id = ?', d.id),
-      task: d.task_id ? db.get('SELECT id, title FROM tasks WHERE id = ?', d.task_id) : null,
-      judgment: db.get("SELECT * FROM judgments WHERE kind = 'decide' AND ref_id = ? AND status = 'open'", d.id) ?? null,
+      task: d.task_id ? db.get('SELECT id, title, owner_id FROM tasks WHERE id = ?', d.task_id) : null,
+      judgment: db.get("SELECT * FROM judgments WHERE kind = 'decide' AND ref_id = ? AND user_id = ? AND status = 'open'", d.id, uid) ?? null,
+      escalation: d.decider_user_id ? { deciderUserId: d.decider_user_id, deciderName: domain.user(d.decider_user_id).name, why: d.escalate_why, audience } : null,
+      canRevoke: domain.canRevokeDecision(uid, d.id),
+      linkedStandards: db.all('SELECT id, text, enabled FROM standards WHERE space_id = ? AND source_ref = ? ORDER BY created_at', d.space_id, d.id),
     }
+  })
+
+  app.post('/api/discussions/:id/revoke', { preHandler: auth }, async (req) => {
+    const b = (req.body ?? {}) as Body
+    return domain.revokeDecision(me(req).id, (req.params as { id: string }).id, { reason: str(b.reason, 500), disableStandards: b.disableStandards === true })
   })
 
   // ---------- assets ----------

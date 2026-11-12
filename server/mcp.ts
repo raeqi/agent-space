@@ -106,11 +106,11 @@ export function buildMcpServer(domain: Domain, agent: Agent): McpServer {
     }))
 
     server.registerTool('escalate_discussion', {
-      description: '分歧超出 agent 能定的范围（涉及目标、日期、资源或体验取舍）时使用：提炼分歧点和可选方案，交给 owner 定夺。',
+      description: '分歧超出 agent 能定的范围（涉及目标、日期、资源或体验取舍）时使用：提炼分歧点和可选方案。定夺交给任务负责人；没有负责人时交给空间 owner。立场不同的成员会看到。',
       inputSchema: { discussion_id: z.string(), summary: z.string().min(1), options: z.array(z.string()).min(1).max(4) },
     }, guard((args: { discussion_id: string; summary: string; options: string[] }) => {
       domain.escalateDiscussion(agent, args)
-      return '已交给 owner 定夺'
+      return '已交给任务负责人定夺'
     }))
   }
 
@@ -177,7 +177,7 @@ export function buildMcpServer(domain: Domain, agent: Agent): McpServer {
     }))
 
     server.registerTool('suggest_decision', {
-      description: '以 owner 名义对升级的分歧给出建议结论和依据（引用团队标准、目标或主人的判断手册）。owner 可以按建议定或改判。',
+      description: '对升级的分歧给出建议结论和依据（引用团队标准、目标或主人的判断手册）。任务负责人可以按建议定或改判；其他被通知的人的建议只供参考。',
       inputSchema: { discussion_id: z.string(), choice: z.string().min(1), basis: z.string().min(1) },
     }, guard((args: { discussion_id: string; choice: string; basis: string }) => {
       domain.suggestDecision(agent, args)
