@@ -15,6 +15,13 @@ const at = (daysAgo: number, hh: number, mm = 0): number => {
   return Math.min(d.getTime(), Date.now() - 60_000)
 }
 
+/** Write the showcase space only when the database has no spaces yet. */
+export function seedDemoIfEmpty(db: Db): boolean {
+  if (db.get('SELECT 1 FROM spaces LIMIT 1')) return false
+  seedDemo(db)
+  return true
+}
+
 export function seedDemo(db: Db): { spaces: number } {
   if (db.get('SELECT 1 FROM spaces LIMIT 1')) throw new Error('数据库里已经有空间了，演示数据只写入空库。换一个 DATA_DIR 或删除 data/ 后再试。')
   const domain = new Domain(db, new Bus(), { enqueue: () => undefined })
@@ -27,13 +34,32 @@ export function seedDemo(db: Db): { spaces: number } {
     wang: domain.ensureUser('wang@demo.local', '王磊'),
     chen: domain.ensureUser('chen@demo.local', '陈一'),
   }
+  // These profiles stand in for what a personal desktop agent would already have learned.
   const profile: Record<string, [string, string]> = {
-    lin: ['产品经理，负责新支付上线和新手引导。本月主要精力在新支付。', '上线日期优先于体验增强。对外文档必须有客服话术。花钱超过 1000 元、改目标或改日期一定先问我。'],
-    zhou: ['研发，支付网关和回调链路最熟。本周回调重试要提测，周四下午有空。', '技术风险先暴露，不要为赶工跳过压测。'],
-    su: ['设计，负责新手引导和支付页交互。', '体验问题要有数据支撑，A/B 结果优先。'],
-    he: ['测试，做过 3 次支付压测，负责压测与灰度放量。本月 40% 可用。', '成功率不达标绝不放量。'],
-    wang: ['产品组组长。', '本季度优先保证新支付按时上线。'],
-    chen: ['研发，下周起接替周远负责新支付研发。', ''],
+    lin: [
+      '产品经理，负责新支付上线和支付页体验。习惯先写能独立读懂的结论，再写范围、灰度和回滚。本月几乎全部精力在 12/3 全量替换旧通道，周四下午固定评审。对外口径、客服话术和上线日期由她拍板。',
+      '工作方式：先看日期和结论，再看细节。一页读不完的材料，第一段必须能单独成立。\n会通过：结论在开头；范围、灰度和回滚写清；客服能照着说；没有改目标或改日期。\n会打回：对外文档没有客服话术；用体验优化换掉已经答应的上线日期；花钱超过 1000 元却没先问；灰度条件写成「看情况」。\n过往决定：分期付款推迟到风控规则就绪之后。入场动效如果要占用回调重试的工期，放二期，保 12/3。\n一定要本人：改目标、改日期、超预算、对外承诺。其余按「上线日期优先于体验增强」执行。',
+    ],
+    zhou: [
+      '研发，支付网关、回调和重试最熟。本周要把回调重试提到可测，周四下午能评审。交接给陈一之前，关键路径上的技术风险由他先说清楚。',
+      '工作方式：风险先写出来，再谈能不能赶上。不接受为了日期跳过压测或幂等。\n会通过：接口变更写进文档、测试同步过、重试有次数和幂等、排期拆到天并标出关键路径。\n会打回：字段名和已发布的接口文档不一致；没有失败码；用「先上线再补测」换工期。\n过往决定：回调字段用 retry_count，跟接口文档 v2 一致。超时的处理是调大连接池并加重试，而不是加长等待。\n一定要本人：改协议、跳过压测、动关键路径超过两天。',
+    ],
+    su: [
+      '设计，负责新手引导和支付页交互。看重完成率和说得清的体验问题，A/B 结果优先于感觉。本周在做引导第 3 步，能参加体验和范围讨论。',
+      '工作方式：体验问题要有数据或可复现的路径，不接受只有形容词的方案。\n会通过：两版对比放在一起；写清研发工作量；第 3 步的完成率有口径。\n会打回：只给一版终稿；用「更好看」代替完成率；动效方案不写要占多少研发时间。\n过往决定：绑卡不该塞进新手引导，竞品都放在首次支付。第 3 步流失高时，先查加载时间和文案，而不是加动画。\n立场：体验可以争，但不占用已经承诺的上线日期。动效若要 4 天，她会把数据摆出来，把日期留给负责人。',
+    ],
+    he: [
+      '测试，做过 3 次支付压测，负责压测、灰度和失败码口径。本月大约 40% 时间在新支付。成功率不达标时她会拦住放量。',
+      '工作方式：先看失败分布和是否达标，再看叙述。没有口径的结论一律退回。\n会通过：覆盖压测里出现的失败码；峰值和成功率写在第一段；放量条件是数字。\n会打回：成功率低于 99.5% 还写「可以全量」；FAQ 漏掉压测里的主要失败码；没有客服能直接用的话术。\n过往决定：第 2 轮压测达标，但回调超时仍是主要失败。FAQ 先写压测出现的 9 个失败码，其余放附录。\n一定要本人：放量、降低成功率门槛、跳过一轮压测。',
+    ],
+    wang: [
+      '产品组组长。本季度的取舍标准是新支付按时上线，其他事项给它让路。周报要短，每个空间只留进展、风险和谁来拍板。',
+      '工作方式：先问这件事会不会挡住 12/3。挡住了就升级，挡不住就让空间自己收掉。\n会通过：结论不超过三行；风险写清影响的日期；需要他拍板的事情单独列出。\n会打回：周报铺陈过程；用局部体验优化改掉季度目标；跨空间的冲突没有人汇总。\n过往决定：本季度优先保证新支付按时上线。分析报告结论放第一页，这条已经是团队标准。\n一定要本人：改季度优先级、加人、跨空间抢同一段工期。',
+    ],
+    chen: [
+      '研发，下周起接替周远负责新支付的回调和网关。还在补上下文。评审时会先复述已经写下的决定，再提新方案。',
+      '工作方式：先对齐已经发布的接口和标准，再改。交接期不发明第二套字段名。\n会通过：改动说明影响面；和接口文档 v2、retry_count 这些已有决定一致；测试在变更名单里。\n会打回：没读旧通道复盘就重做连接池；用新名字替换已经发布的字段；跳过幂等。\n过往决定：他还没在这个空间拍过板。周远留下的决定先延续，有冲突再交给周远或林夏。\n一定要本人：协议变更和跳过压测，在交接完成前仍要问周远或林夏。',
+    ],
   }
   for (const [k, u] of Object.entries(people)) domain.updatePersonalAgent(u.id, { public_profile: profile[k]![0], handbook: profile[k]![1] })
   const pa = (u: { id: string }): Agent => domain.personalAgent(u.id)
@@ -98,9 +124,12 @@ export function seedDemo(db: Db): { spaces: number } {
   msg(d1, ag('开发 agent'), '动效要多 4 天，和回调重试占用同一段时间。', at(0, 8, 14))
   msg(d1, pa(people.zhou), '建议放二期，关键路径上已经有 2 天风险。', at(0, 8, 16))
   msg(d1, pa(people.su), '建议一期上，A/B 测试里第 3 步完成率高 3%。', at(0, 8, 18))
-  msg(d1, assistant, '总结：分歧在于用 4 天研发换 3% 转化，超出 agent 能定的范围，交给 owner 定夺。', at(0, 8, 22))
-  msg(d1, pa(people.lin), '以 owner 名义建议：动效放二期，交互主体一期上线。依据：团队标准「上线日期优先于体验增强」', at(0, 8, 40))
-  db.insert('judgments', { id: newId('j'), space_id: pay.id, user_id: people.lin.id, kind: 'decide', ref_id: d1, title: '动效放一期还是二期', suggestion: '动效放二期，交互主体一期上线', suggested_action: 'accept', basis: '团队标准「上线日期优先于体验增强」', created_at: at(0, 8, 40) })
+  const escalateWhy = '交给苏晴定夺，因为苏晴是任务「新手引导交互方案」的负责人。周远的个人 agent 在讨论里立场不同，周远也会看到并可以补充意见'
+  msg(d1, assistant, `总结：分歧在于用 4 天研发换 3% 转化，超出 agent 能定的范围。${escalateWhy}`, at(0, 8, 22))
+  msg(d1, pa(people.su), '以负责人名义建议：动效放二期，交互主体一期上线。依据：团队标准「上线日期优先于体验增强」', at(0, 8, 40))
+  db.update('discussions', d1, { decider_user_id: people.su.id, audience: JSON.stringify([people.su.id, people.zhou.id]), escalate_why: escalateWhy })
+  db.insert('judgments', { id: newId('j'), space_id: pay.id, user_id: people.su.id, kind: 'decide', role: 'decide', ref_id: d1, title: '动效放一期还是二期', suggestion: '动效放二期，交互主体一期上线', suggested_action: 'accept', basis: '团队标准「上线日期优先于体验增强」', created_at: at(0, 8, 40) })
+  db.insert('judgments', { id: newId('j'), space_id: pay.id, user_id: people.zhou.id, kind: 'decide', role: 'watch', ref_id: d1, title: '动效放一期还是二期', suggestion: '建议放二期，关键路径上已经有风险。', suggested_action: 'watch', basis: escalateWhy, created_at: at(0, 8, 41) })
 
   // in progress
   const retry = task(pay.id, { title: '回调重试', status: 'in_progress', owner: people.zhou, creator: people.zhou, exec: ag('开发 agent'), acceptance: ['超时自动重试 3 次', '幂等'], created: at(5, 9), live: '写重试逻辑，62%' })
@@ -224,7 +253,7 @@ export function seedDemo(db: Db): { spaces: number } {
   // ---------- work log for 林夏 ----------
   const log = (text: string, spaceId: string, basis: string, link: string, ts: number) =>
     db.insert('work_log', { id: newId('wl'), user_id: people.lin.id, agent_id: pa(people.lin).id, space_id: spaceId, text, basis, link, created_at: ts })
-  log('在讨论「动效放一期还是二期」里以 owner 名义给出建议', pay.id, '团队标准「上线日期优先于体验增强」', `/spaces/${pay.id}/discussions/${d1}`, at(0, 8, 40))
+  db.insert('work_log', { id: newId('wl'), user_id: people.su.id, agent_id: pa(people.su).id, space_id: pay.id, text: '在讨论「动效放一期还是二期」里以负责人名义给出建议', basis: '团队标准「上线日期优先于体验增强」', link: `/spaces/${pay.id}/discussions/${d1}`, created_at: at(0, 8, 40) })
   log('看了「发布说明 v1」的交付，建议打回', pay.id, '验收标准第 3 条', `/spaces/${pay.id}/tasks/${notes}`, at(0, 9, 8))
   log('看了「新手引导流失分析」的交付，建议通过', team.id, '团队标准「分析报告结论放第一页」', `/spaces/${team.id}/tasks/${funnel}`, at(0, 8))
   log('在讨论「FAQ 覆盖哪些失败码」里替你陈述立场', pay.id, '', `/spaces/${pay.id}/discussions/${d2}`, at(1, 16, 12))

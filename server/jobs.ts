@@ -3,6 +3,7 @@ import { newId, now, parseJson } from './db.ts'
 import type { Domain, JobKind, JobSink } from './domain.ts'
 import type { AgentRuntimePool } from './agents/runtime.ts'
 import { buildPrompt } from './agents/prompts.ts'
+import { runOptionsForJob } from './agents/runtime.ts'
 
 interface JobRow {
   id: string
@@ -14,6 +15,14 @@ interface JobRow {
 }
 
 const MAX_ATTEMPTS = 2
+
+/** What to record when the model turn ended without the expected tool effect. */
+export function describeMissingEffect(kind: string, finishReason: string | null, finalResponse: string): string {
+  if (kind === 'execute' && (finishReason === 'max-tokens' || (finishReason ?? '').includes('max-tokens'))) {
+    return '模型在调用 submit_artifact 之前达到输出上限（max-tokens），产物没有提交。负责人可以重新执行。'
+  }
+  return `agent 没有完成预期操作（${finishReason ?? 'unknown'}）：${finalResponse.slice(0, 300)}`
+}
 
 const ACTIVITY: Record<JobKind, string> = {
   triage: '整理新任务',
@@ -121,10 +130,10 @@ export class JobRunner implements JobSink {
       if (job.kind === 'execute') d.db.update('tasks', String(payload.taskId), { live: payload.feedback ? 'agent 在按打回意见修改' : 'agent 执行中', updated_at: now() })
       if (job.kind === 'execute' || job.kind === 'triage') d.touch(d.task(String(payload.taskId)).space_id)
       if (job.kind === 'plan') d.touch(String(payload.spaceId))
-      const prompt = buildPrompt(d, job.kind, agent.id, payload)
-      const result = await this.pool.run(agent, prompt)
+      const prompt = buildPrompt(d, job.kind, agent.id, payload, { lightMode: this.pool.config.lightMode })
+      const result = await this.pool.run(agent, prompt, runOptionsForJob(this.pool.config, job.kind))
       this.db.update('jobs', job.id, { dsh_session_id: result.sessionId })
-      if (!this.effectHappened(job.kind, payload, job.agent_id)) error = `agent 没有完成预期操作（${result.finishReason ?? 'unknown'}）：${result.finalResponse.slice(0, 300)}`
+      if (!this.effectHappened(job.kind, payload, job.agent_id)) error = describeMissingEffect(job.kind, result.finishReason, result.finalResponse)
     } catch (e) {
       error = (e as Error).message
     } finally {
@@ -152,7 +161,14 @@ export class JobRunner implements JobSink {
       case 'review_suggest': return d.task(String(p.taskId)).status === 'review' && !this.hasOpenJudgment('confirm', String(p.taskId))
       case 'discussion_reply':
       case 'discussion_moderate': return d.discussion(String(p.discussionId)).status === 'open'
-      case 'decide_suggest': return d.discussion(String(p.discussionId)).status === 'escalated' && !this.hasOpenJudgment('decide', String(p.discussionId))
+      case 'decide_suggest': {
+        const disc = d.discussion(String(p.discussionId))
+        if (disc.status !== 'escalated') return false
+        const uid = String(p.userId ?? '')
+        if (!uid) return !this.hasOpenJudgment('decide', disc.id)
+        const row = this.db.get<{ suggestion: string }>('SELECT suggestion FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', disc.id, uid, 'open')
+        return !row || !row.suggestion.trim()
+      }
       case 'plan': return !!d.space(String(p.spaceId)).goal_title
     }
   }
@@ -168,7 +184,14 @@ export class JobRunner implements JobSink {
         return (msgs?.n ?? 0) > 0 || d.discussion(String(p.discussionId)).status !== 'open'
       }
       case 'discussion_moderate': return d.discussion(String(p.discussionId)).status !== 'open'
-      case 'decide_suggest': return this.hasOpenJudgment('decide', String(p.discussionId)) || d.discussion(String(p.discussionId)).status !== 'escalated'
+      case 'decide_suggest': {
+        const disc = d.discussion(String(p.discussionId))
+        if (disc.status !== 'escalated') return true
+        const uid = String(p.userId ?? '')
+        if (!uid) return this.hasOpenJudgment('decide', disc.id)
+        const row = this.db.get<{ suggestion: string }>('SELECT suggestion FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', disc.id, uid, 'open')
+        return !!row && !!row.suggestion.trim()
+      }
       case 'plan': return !!this.db.get("SELECT 1 FROM tasks WHERE space_id = ? AND source = 'plan' AND created_at >= ?", String(p.spaceId), Number(p.since ?? 0))
     }
   }
@@ -190,8 +213,9 @@ export class JobRunner implements JobSink {
       }
       case 'execute': {
         const t = d.task(String(p.taskId))
-        d.db.update('tasks', t.id, { live: '执行 agent 没能完成，需要人处理', updated_at: now() })
-        d.event(t.id, 'system', null, '空间', `执行失败，已停止自动重试。原因：${short}`)
+        const hitCap = error.includes('max-tokens')
+        d.db.update('tasks', t.id, { live: hitCap ? '输出到上限，产物还没提交。负责人可以重新执行。' : '执行 agent 没能完成，需要人处理', updated_at: now() })
+        d.event(t.id, 'system', null, '空间', hitCap ? '执行停在输出上限（max-tokens），产物没有提交。负责人可以重新执行。' : `执行失败，已停止自动重试。原因：${short}`)
         d.touch(t.space_id)
         return
       }
@@ -208,7 +232,7 @@ export class JobRunner implements JobSink {
       case 'discussion_moderate': {
         const disc = d.discussion(String(p.discussionId))
         if (disc.status !== 'open') return
-        d.escalateDiscussion(d.assistantOf(disc.space_id), { discussion_id: disc.id, summary: `空间助理没能总结这次讨论（${short}），请 owner 直接看发言后定夺`, options: [] })
+        d.escalateDiscussion(d.assistantOf(disc.space_id), { discussion_id: disc.id, summary: `空间助理没能总结这次讨论（${short}），请负责人直接看发言后定夺`, options: [] })
         return
       }
       case 'plan':
@@ -217,11 +241,17 @@ export class JobRunner implements JobSink {
         return
       case 'decide_suggest': {
         const disc = d.discussion(String(p.discussionId))
-        if (this.hasOpenJudgment('decide', disc.id)) return
-        const s = d.space(disc.space_id)
-        d.db.insert('judgments', { id: newId('j'), space_id: s.id, user_id: s.owner_id, kind: 'decide', ref_id: disc.id, title: disc.title, suggestion: '', suggested_action: '', basis: '你的 agent 没能给出建议，请直接定夺', created_at: now() })
-        d.bus.publish(`user:${s.owner_id}`, { type: 'judgments' })
-        d.touch(s.id)
+        if (disc.status !== 'escalated') return
+        const uid = String(p.userId || disc.decider_user_id || d.space(disc.space_id).owner_id)
+        const existing = d.db.get<{ id: string; suggestion: string }>('SELECT id, suggestion FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', disc.id, uid, 'open')
+        if (existing) {
+          if (!existing.suggestion.trim()) d.db.update('judgments', existing.id, { basis: '你的 agent 没能给出建议，请直接看讨论后处理' })
+          d.bus.publish(`user:${uid}`, { type: 'judgments' })
+          return
+        }
+        d.db.insert('judgments', { id: newId('j'), space_id: disc.space_id, user_id: uid, kind: 'decide', ref_id: disc.id, title: disc.title, suggestion: '', suggested_action: '', basis: '你的 agent 没能给出建议，请直接定夺', role: 'decide', created_at: now() })
+        d.bus.publish(`user:${uid}`, { type: 'judgments' })
+        d.touch(disc.space_id)
         return
       }
     }

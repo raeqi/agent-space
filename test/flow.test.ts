@@ -44,7 +44,13 @@ before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'agent-space-test-'))
   const port = await freePort()
   process.env.DEEPSEEK_API_KEY = 'sk-test'
-  const config = loadConfig({ port, host: '127.0.0.1', internalUrl: `http://127.0.0.1:${port}`, dataDir, modelBaseUrl: model.url, agentTimeoutMs: 120_000, maxConcurrentAgents: 4, webDist: join(dataDir, 'no-web') })
+  // The scripted model speaks the DeepSeek adapter's Messages format. Pin that route so a
+  // generic MODEL_* in the environment cannot switch the test onto Chat Completions.
+  const config = loadConfig({
+    port, host: '127.0.0.1', internalUrl: `http://127.0.0.1:${port}`, dataDir, modelBaseUrl: model.url,
+    provider: 'deepseek-official', model: 'deepseek-flash', apiKeyEnv: 'DEEPSEEK_API_KEY', modelRoute: 'deepseek',
+    agentTimeoutMs: 120_000, maxConcurrentAgents: 4, webDist: join(dataDir, 'no-web'),
+  })
   app = await createApp(config, { logger: false })
   await app.server.listen({ port, host: '127.0.0.1' })
   app.jobs.start()

@@ -3,8 +3,8 @@ import { loadConfig } from '../server/config.ts'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-if (!process.env.DEEPSEEK_API_KEY) throw new Error('请在 .env 配置自己的 API key')
-const config = loadConfig({ port: 8798, host: '127.0.0.1', internalUrl: 'http://127.0.0.1:8798', dataDir: join(process.cwd(), 'data-live-verification'), modelBaseUrl: '', accessCode: '' })
+if (!process.env.MODEL_API_KEY && !process.env.DEEPSEEK_API_KEY) throw new Error('请在 .env 配置 MODEL_API_KEY（只填 DEEPSEEK_API_KEY 的旧配置仍可用）')
+const config = loadConfig({ port: 8798, host: '127.0.0.1', internalUrl: 'http://127.0.0.1:8798', dataDir: join(process.cwd(), 'data-live-verification'), accessCode: '' })
 const app = await createApp(config, { logger: false })
 await app.server.listen({ port: config.port, host: config.host })
 app.jobs.start()

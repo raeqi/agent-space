@@ -26,6 +26,7 @@ export async function createApp(config: Config, options: { logger?: boolean } = 
   const pool = new AgentRuntimePool(config)
   const jobs = new JobRunner(db, pool)
   const domain = new Domain(db, bus, jobs)
+  if (config.lightMode) domain.limits = { maxDiscussionsPerTask: 1, maxArtifactChars: 2000, skipReviewSuggest: true }
   jobs.attach(domain)
   domain.ensureGeneralAgents()
 

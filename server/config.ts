@@ -1,8 +1,146 @@
 import { resolve } from 'node:path'
 
-function env(name: string, fallback: string): string {
-  const v = process.env[name]
-  return v === undefined || v === '' ? fallback : v
+function readEnv(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
+  const value = env[name]
+  return value === undefined || value === '' ? fallback : value
+}
+
+function nonEmpty(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const value = env[name]
+  return value === undefined || value === '' ? undefined : value
+}
+
+/**
+ * How the harness should reach the configured model.
+ * `deepseek` is the legacy official adapter. `openai-compatible` is a hand-declared
+ * Chat Completions route for whatever base URL the operator supplied. `catalog`
+ * is a built-in harness provider selected by name, using that provider's own endpoint.
+ */
+export type ModelRoute = 'deepseek' | 'openai-compatible' | 'catalog'
+
+export interface ModelSettings {
+  provider: string
+  model: string
+  modelBaseUrl: string
+  /** Environment variable name the harness reads. Never the key itself. */
+  apiKeyEnv: string
+  modelRoute: ModelRoute
+  /** Model for short jobs. Falls back to `model` when MODEL_LIGHT_NAME is unset. */
+  lightModel: string
+  /** Shorter real-model runs: no pre-review, one discussion per task, shorter artifacts. */
+  lightMode: boolean
+  /**
+   * Optional execute output cap. Values below 16000 are ignored: a reasoning
+   * model can spend a small budget before it ever calls submit_artifact.
+   */
+  executeMaxTokens: number | null
+}
+
+const DEEPSEEK_PROVIDER = 'deepseek-official'
+const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible'
+const PROVIDER_ID = /^[a-z][a-z0-9-]*$/
+
+/**
+ * Demo mode uses the in-process scripted model. It is on when DEMO_MODE is
+ * explicitly enabled, or when neither the new key nor the legacy key is set.
+ * DEMO_MODE=0 keeps the previous "refuse to boot without a key" check.
+ */
+export function demoModeFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const flag = (env.DEMO_MODE ?? '').trim().toLowerCase()
+  if (flag === '1' || flag === 'true' || flag === 'yes' || flag === 'on') return true
+  if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') return false
+  return !nonEmpty(env, 'MODEL_API_KEY') && !nonEmpty(env, 'DEEPSEEK_API_KEY')
+}
+
+/**
+ * Resolve the model route from the environment.
+ *
+ * The public setup is MODEL_API_KEY + MODEL_BASE_URL + MODEL_NAME. A custom base URL
+ * is OpenAI Chat Completions, so operators do not pick a vendor. DEEPSEEK_API_KEY and
+ * DSH_* remain a legacy DeepSeek setup: MODEL_BASE_URL then still overrides that
+ * adapter's endpoint, which is what the scripted test model relies on.
+ */
+export function resolveModelSettings(env: NodeJS.ProcessEnv): ModelSettings {
+  const modelApiKey = nonEmpty(env, 'MODEL_API_KEY')
+  const modelName = nonEmpty(env, 'MODEL_NAME')
+  const legacyModel = nonEmpty(env, 'DSH_MODEL')
+  const modelBaseUrl = nonEmpty(env, 'MODEL_BASE_URL') ?? ''
+  const providerFromNew = nonEmpty(env, 'MODEL_PROVIDER')
+  const providerFromLegacy = nonEmpty(env, 'DSH_PROVIDER')
+  // New key, model, or provider means the operator is on the generic setup.
+  // A leftover DSH_PROVIDER must not drag that setup back onto the DeepSeek adapter.
+  const legacyOnly = !modelApiKey && !modelName && !providerFromNew
+  const namedProvider = providerFromNew ?? (legacyOnly ? providerFromLegacy : undefined)
+
+  let modelRoute: ModelRoute
+  let provider: string
+  if (namedProvider === DEEPSEEK_PROVIDER || namedProvider === 'deepseek') {
+    modelRoute = 'deepseek'
+    provider = DEEPSEEK_PROVIDER
+  } else if (namedProvider && modelBaseUrl) {
+    modelRoute = 'openai-compatible'
+    provider = namedProvider
+  } else if (namedProvider) {
+    modelRoute = 'catalog'
+    provider = namedProvider
+  } else if (!legacyOnly) {
+    modelRoute = 'openai-compatible'
+    provider = OPENAI_COMPATIBLE_PROVIDER
+  } else {
+    modelRoute = 'deepseek'
+    provider = DEEPSEEK_PROVIDER
+  }
+
+  const model = modelName ?? legacyModel ?? (modelRoute === 'deepseek' ? 'deepseek-flash' : '')
+  const apiKeyEnv = modelApiKey ? 'MODEL_API_KEY' : 'DEEPSEEK_API_KEY'
+  const lightFlag = (env.LIGHT_MODE ?? '').trim().toLowerCase()
+  return {
+    provider, model, modelBaseUrl, apiKeyEnv, modelRoute,
+    lightModel: nonEmpty(env, 'MODEL_LIGHT_NAME') ?? model,
+    lightMode: lightFlag === '1' || lightFlag === 'true' || lightFlag === 'yes' || lightFlag === 'on',
+    executeMaxTokens: executeMaxTokensFromEnv(env),
+  }
+}
+
+/** Ignore a cap that a reasoning model would exhaust before submitting. */
+export function executeMaxTokensFromEnv(env: NodeJS.ProcessEnv): number | null {
+  const raw = nonEmpty(env, 'EXECUTE_MAX_TOKENS')
+  if (!raw) return null
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 16_000) return null
+  return Math.floor(value)
+}
+
+/** Boot-time message when the process cannot call a model. Null when configuration is usable or demo mode will supply one. */
+export function modelConfigProblem(settings: ModelSettings, env: NodeJS.ProcessEnv): string | null {
+  if (demoModeFromEnv(env)) return null
+  if (!PROVIDER_ID.test(settings.provider)) {
+    return `[agent-space] 供应商 id「${settings.provider}」无法使用。设置 MODEL_API_KEY、MODEL_BASE_URL 和 MODEL_NAME 即可连接任意 OpenAI 兼容服务，MODEL_PROVIDER 可以留空。`
+  }
+  const key = nonEmpty(env, 'MODEL_API_KEY') ?? nonEmpty(env, 'DEEPSEEK_API_KEY')
+  if (!key && !settings.modelBaseUrl) {
+    return '[agent-space] 请复制 .env.example 为 .env，填写 MODEL_API_KEY、MODEL_BASE_URL 和 MODEL_NAME。任何 OpenAI 兼容的模型服务都可以，项目不提供共享密钥。'
+  }
+  if (settings.modelRoute === 'openai-compatible') {
+    const missing: string[] = []
+    if (!settings.modelBaseUrl) missing.push('MODEL_BASE_URL')
+    if (!settings.model) missing.push('MODEL_NAME')
+    if (missing.length === 2) return '[agent-space] 请设置 MODEL_BASE_URL 和 MODEL_NAME。前者是 OpenAI 兼容接口地址（一般以 /v1 结尾），后者是模型名。'
+    if (missing[0] === 'MODEL_BASE_URL') return '[agent-space] 请设置 MODEL_BASE_URL，指向服务商的 OpenAI 兼容接口（一般以 /v1 结尾）。'
+    if (missing[0] === 'MODEL_NAME') return '[agent-space] 请设置 MODEL_NAME，填入服务商要求的模型名。'
+  }
+  if (settings.modelRoute === 'catalog' && !settings.model) return '[agent-space] 请设置 MODEL_NAME，填入该供应商的模型名。'
+  return null
+}
+
+/** One-line notice when an old variable is still what the process actually reads. */
+export function legacyModelConfigWarning(env: NodeJS.ProcessEnv): string | null {
+  const parts: string[] = []
+  if (!nonEmpty(env, 'MODEL_API_KEY') && nonEmpty(env, 'DEEPSEEK_API_KEY')) parts.push('DEEPSEEK_API_KEY 请改用 MODEL_API_KEY')
+  if (!nonEmpty(env, 'MODEL_NAME') && nonEmpty(env, 'DSH_MODEL')) parts.push('DSH_MODEL 请改用 MODEL_NAME')
+  if (!nonEmpty(env, 'MODEL_PROVIDER') && nonEmpty(env, 'DSH_PROVIDER')) parts.push('DSH_PROVIDER 一般可以删掉，自定义地址会按 OpenAI 兼容接口连接')
+  if (!parts.length) return null
+  return `[agent-space] 仍在使用旧的模型配置（${parts.join('；')}）。旧变量暂时还能用。`
 }
 
 export interface Config {
@@ -14,11 +152,13 @@ export interface Config {
   /** Optional shared code required at login. Empty means open login. */
   accessCode: string
   cookieSecret: string
-  /** dsh provider/model route for every agent. */
+  /** Harness provider id for every agent. */
   provider: string
   model: string
-  /** Override of the DeepSeek API base URL (tests point this at a scripted model). */
+  /** OpenAI-compatible base URL, or the legacy DeepSeek endpoint override. */
   modelBaseUrl: string
+  apiKeyEnv: string
+  modelRoute: ModelRoute
   /** Per agent turn timeout. */
   agentTimeoutMs: number
   /** Close an idle agent runtime after this long. */
@@ -26,24 +166,36 @@ export interface Config {
   /** Max agent runtimes running turns at once. */
   maxConcurrentAgents: number
   webDist: string
+  /** Scripted model and seeded space, instead of a configured provider. */
+  demoMode: boolean
+  lightModel: string
+  lightMode: boolean
+  executeMaxTokens: number | null
 }
 
-export function loadConfig(overrides: Partial<Config> = {}): Config {
-  const port = Number(env('PORT', '8787'))
+export function loadConfig(overrides: Partial<Config> = {}, env: NodeJS.ProcessEnv = process.env): Config {
+  const port = Number(readEnv(env, 'PORT', '8787'))
+  const model = resolveModelSettings(env)
   const base: Config = {
     port,
-    host: env('HOST', '0.0.0.0'),
-    internalUrl: env('INTERNAL_URL', `http://127.0.0.1:${port}`),
-    dataDir: resolve(env('DATA_DIR', './data')),
-    accessCode: env('ACCESS_CODE', ''),
-    cookieSecret: env('COOKIE_SECRET', 'dev-only-change-me-dev-only-change-me'),
-    provider: env('DSH_PROVIDER', 'deepseek-official'),
-    model: env('DSH_MODEL', 'deepseek-flash'),
-    modelBaseUrl: env('MODEL_BASE_URL', ''),
-    agentTimeoutMs: Number(env('AGENT_TIMEOUT_MS', String(8 * 60_000))),
-    agentIdleMs: Number(env('AGENT_IDLE_MS', String(10 * 60_000))),
-    maxConcurrentAgents: Number(env('MAX_CONCURRENT_AGENTS', '4')),
-    webDist: resolve(env('WEB_DIST', './dist')),
+    host: readEnv(env, 'HOST', '0.0.0.0'),
+    internalUrl: readEnv(env, 'INTERNAL_URL', `http://127.0.0.1:${port}`),
+    dataDir: resolve(readEnv(env, 'DATA_DIR', './data')),
+    accessCode: readEnv(env, 'ACCESS_CODE', ''),
+    cookieSecret: readEnv(env, 'COOKIE_SECRET', 'dev-only-change-me-dev-only-change-me'),
+    provider: model.provider,
+    model: model.model,
+    modelBaseUrl: model.modelBaseUrl,
+    apiKeyEnv: model.apiKeyEnv,
+    modelRoute: model.modelRoute,
+    agentTimeoutMs: Number(readEnv(env, 'AGENT_TIMEOUT_MS', String(8 * 60_000))),
+    agentIdleMs: Number(readEnv(env, 'AGENT_IDLE_MS', String(10 * 60_000))),
+    maxConcurrentAgents: Number(readEnv(env, 'MAX_CONCURRENT_AGENTS', '4')),
+    webDist: resolve(readEnv(env, 'WEB_DIST', './dist')),
+    demoMode: demoModeFromEnv(env),
+    lightModel: model.lightModel,
+    lightMode: model.lightMode,
+    executeMaxTokens: model.executeMaxTokens,
   }
   return { ...base, ...overrides }
 }

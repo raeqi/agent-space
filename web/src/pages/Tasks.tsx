@@ -140,6 +140,9 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
       {t.status === 'unclaimed' && (
         <div className="row"><button className="btn primary" onClick={() => void claim()}>由我负责，交给 agent 执行</button></div>
       )}
+      {data.canRetry && (t.owner_id === me.user.id || space?.space?.owner_id === me.user.id) && (
+        <div className="row"><button className="btn primary" onClick={() => void api('POST', `/api/tasks/${t.id}/retry`).then(reload)}>重新执行</button></div>
+      )}
       {/* The deliverable stays compact: title, a one-line summary, and the full text and the agent's
           self-check against the acceptance criteria one click away. */}
       {latest && (() => {
@@ -168,7 +171,8 @@ function TaskPanel({ taskId, spaceId }: { taskId: string; spaceId: string }) {
       })()}
       {data.discussions.map((d: any) => (
         <Link key={d.id} to={`/spaces/${spaceId}/discussions/${d.id}`} className="card pad stack" style={{ gap: 2, textDecoration: 'none' }}>
-          <span className="spread sm"><span>讨论：{d.title}</span>{d.status === 'resolved' ? <Tag tone="green">已有结论</Tag> : <Tag tone="amber">{d.status === 'escalated' ? '等人定夺' : '进行中'}</Tag>}</span>
+          <span className="spread sm"><span>讨论：{d.title}</span>{d.status === 'resolved' ? <Tag tone="green">已有结论</Tag> : <Tag tone="amber">{d.status === 'escalated' ? (d.decider_name ? `交给${d.decider_name}定夺` : '等人定夺') : '进行中'}</Tag>}</span>
+          {d.status === 'escalated' && d.escalate_why && <span className="small muted">{d.escalate_why}</span>}
           {d.outcome && <span className="small muted">{d.outcome}</span>}
         </Link>
       ))}

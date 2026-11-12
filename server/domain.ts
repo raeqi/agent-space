@@ -94,6 +94,8 @@ export const DEFAULT_SPECIALISTS: Array<{ name: string; specialty: string }> = [
 ]
 
 export class Domain {
+  /** Zero means unlimited. Light mode sets a discussion cap, an artifact cap, and skips pre-review. */
+  limits = { maxDiscussionsPerTask: 0, maxArtifactChars: 0, skipReviewSuggest: false }
   readonly db: Db
   readonly bus: Bus
   jobs: JobSink
@@ -444,6 +446,24 @@ export class Domain {
     return this.task(t.id)
   }
 
+  /** Re-queue a stuck execute after the model stopped before submit_artifact. */
+  retryExecute(userId: string, taskId: string): void {
+    const t = this.task(taskId)
+    this.requireMember(t.space_id, userId)
+    const space = this.space(t.space_id)
+    if (userId !== t.owner_id && userId !== space.owner_id) throw new DomainError('只有负责人或空间 owner 可以重新执行', 403)
+    if (t.status !== 'in_progress' || t.blocked_by_discussion || this.scheduleWait(t)) throw new DomainError('这个任务现在不能重新执行')
+    if (!t.executor_agent_id) throw new DomainError('还没有执行 agent')
+    const pending = this.db.get("SELECT 1 FROM jobs WHERE kind = 'execute' AND status IN ('queued','running') AND json_extract(payload, '$.taskId') = ?", t.id)
+    if (pending) throw new DomainError('执行已经在进行')
+    const failed = this.db.get("SELECT 1 FROM jobs WHERE kind = 'execute' AND status = 'failed' AND json_extract(payload, '$.taskId') = ?", t.id)
+    if (!failed) throw new DomainError('没有失败的执行可以重试')
+    this.event(t.id, 'user', userId, this.user(userId).name, '重新执行')
+    this.db.update('tasks', t.id, { live: 'agent 准备重新执行', updated_at: now() })
+    this.jobs.enqueue('execute', t.executor_agent_id, { taskId: t.id })
+    this.touch(t.space_id)
+  }
+
   claimTask(taskId: string, userId: string, executorAgentId?: string): Task {
     const t = this.task(taskId)
     this.requireMember(t.space_id, userId)
@@ -534,6 +554,9 @@ export class Domain {
     const wait = this.scheduleWait(t)
     if (wait) throw new DomainError(`定时任务还没跑完（${wait.seen}/${wait.expected}），现在不要提交；全部执行后系统会叫你交付，请结束本轮`)
     if (!input.content.trim()) throw new DomainError('产物内容不能为空')
+    if (this.limits.maxArtifactChars > 0 && input.content.length > this.limits.maxArtifactChars) {
+      input = { ...input, content: `${input.content.slice(0, this.limits.maxArtifactChars)}\n\n（轻量模式已截断）` }
+    }
     const prev = this.db.get<{ v: number }>('SELECT MAX(version) AS v FROM artifacts WHERE task_id = ?', t.id)
     const artifact = {
       id: newId('ar'), space_id: t.space_id, task_id: t.id, title: input.title.trim() || t.title, kind: input.kind || '文档',
@@ -559,24 +582,35 @@ export class Domain {
     this.db.insert('artifacts', artifact)
     this.db.update('tasks', t.id, { status: 'review' , live: '已交付，等负责人确认', updated_at: now() })
     this.event(t.id, 'agent', agent.id, agent.name, `交付「${artifact.title}」v${artifact.version}，自检后交给负责人确认`)
-    if (t.owner_id) this.jobs.enqueue('review_suggest', this.personalAgent(t.owner_id).id, { taskId: t.id, artifactId: artifact.id })
+    if (t.owner_id && !this.limits.skipReviewSuggest) this.jobs.enqueue('review_suggest', this.personalAgent(t.owner_id).id, { taskId: t.id, artifactId: artifact.id })
+    if (t.owner_id && this.limits.skipReviewSuggest && !this.db.get("SELECT 1 FROM judgments WHERE kind = 'confirm' AND ref_id = ? AND status = 'open'", t.id)) {
+      this.db.insert('judgments', {
+        id: newId('j'), space_id: t.space_id, user_id: t.owner_id, kind: 'confirm', ref_id: t.id, title: artifact.title,
+        suggestion: '', suggested_action: '', basis: '轻量模式不跑个人 agent 预审，请直接查看交付后通过或打回', created_at: now(),
+      })
+      this.bus.publish(`user:${t.owner_id}`, { type: 'judgments' })
+    }
     this.touch(t.space_id)
     return artifact
   }
 
   // ---------- discussions ----------
 
-  discussion(id: string): Row & { id: string; space_id: string; task_id: string | null; status: string; title: string; question: string; opened_by_agent_id: string | null } {
-    const d = this.db.get<Row & { id: string; space_id: string; task_id: string | null; status: string; title: string; question: string; opened_by_agent_id: string | null }>('SELECT * FROM discussions WHERE id = ?', id)
+  discussion(id: string): Row & { id: string; space_id: string; task_id: string | null; status: string; title: string; question: string; opened_by_agent_id: string | null; summary: string; outcome: string; decided_by: string | null; writeback: string; decider_user_id: string | null; audience: string; escalate_why: string; revoked_outcome: string; revoke_reason: string; revoked_by: string | null } {
+    const d = this.db.get<Row & { id: string; space_id: string; task_id: string | null; status: string; title: string; question: string; opened_by_agent_id: string | null; summary: string; outcome: string; decided_by: string | null; writeback: string; decider_user_id: string | null; audience: string; escalate_why: string; revoked_outcome: string; revoke_reason: string; revoked_by: string | null }>('SELECT * FROM discussions WHERE id = ?', id)
     if (!d) throw new DomainError('讨论不存在', 404)
     return d
   }
 
-  openDiscussion(agent: Agent, input: { task_id: string; title: string; question: string; participant_user_ids?: string[] }): Row {
+  openDiscussion(agent: Agent, input: { task_id: string; title: string; question: string; participant_user_ids?: string[] }): Row & { id: string } {
     const t = this.task(input.task_id)
     this.requireAgentInSpace(agent, t.space_id)
     const openCount = this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM discussions WHERE task_id = ? AND status != 'resolved'", t.id)
     if ((openCount?.n ?? 0) > 0) throw new DomainError('这个任务已经有一个进行中的讨论')
+    if (this.limits.maxDiscussionsPerTask > 0) {
+      const total = this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM discussions WHERE task_id = ?', t.id)
+      if ((total?.n ?? 0) >= this.limits.maxDiscussionsPerTask) throw new DomainError('这个任务的讨论次数已经用完。请按已有信息选定一个可执行的做法，直接提交产物，不要再发起讨论。')
+    }
     const userIds = new Set(input.participant_user_ids ?? [])
     if (t.owner_id) userIds.add(t.owner_id)
     const participants = new Set<string>([agent.id])
@@ -635,11 +669,62 @@ export class Domain {
     this.requireAgentInSpace(agent, d.space_id, 'assistant')
     if (d.status !== 'open') throw new DomainError('讨论已经结束或已交给人定夺')
     const options = (input.options ?? []).map((o) => o.trim()).filter(Boolean).slice(0, 4)
-    this.db.update('discussions', d.id, { status: 'escalated', summary: input.summary.trim(), options })
-    this.db.insert('discussion_messages', { id: newId('dm'), discussion_id: d.id, author_kind: 'agent', author_id: agent.id, author_name: agent.name, text: `总结：${input.summary.trim()}（超出 agent 能定的范围，交给 owner 定夺）`, created_at: now() })
-    const s = this.space(d.space_id)
-    this.jobs.enqueue('decide_suggest', this.personalAgent(s.owner_id).id, { discussionId: d.id })
+    const audience = this.escalationAudience(d)
+    this.db.update('discussions', d.id, { status: 'escalated', summary: input.summary.trim(), options, decider_user_id: audience.deciderId, audience: [audience.deciderId, ...audience.watcherIds], escalate_why: audience.why })
+    this.db.insert('discussion_messages', { id: newId('dm'), discussion_id: d.id, author_kind: 'agent', author_id: agent.id, author_name: agent.name, text: `总结：${input.summary.trim()}（超出 agent 能定的范围。${audience.why}）`, created_at: now() })
+    this.openEscalationJudgments(d.id, audience)
     this.touch(d.space_id)
+  }
+
+  /**
+   * The task owner decides. If they have left, the space owner decides.
+   * Members whose personal agents took a different stance are told, and can comment, but do not decide.
+   */
+  private escalationAudience(d: { id: string; space_id: string; task_id: string | null }): { deciderId: string; watcherIds: string[]; why: string } {
+    const space = this.space(d.space_id)
+    const task = d.task_id ? this.task(d.task_id) : null
+    const deciderId = task?.owner_id && this.isMember(d.space_id, task.owner_id) ? task.owner_id : space.owner_id
+    const lastByUser = new Map<string, string>()
+    const msgs = this.db.all<{ author_id: string | null; text: string }>('SELECT author_id, text FROM discussion_messages WHERE discussion_id = ? ORDER BY created_at', d.id)
+    for (const m of msgs) {
+      if (!m.author_id) continue
+      const speaker = this.db.get<Agent>('SELECT * FROM agents WHERE id = ?', m.author_id)
+      if (!speaker || speaker.kind !== 'personal' || !speaker.owner_user_id || !this.isMember(d.space_id, speaker.owner_user_id)) continue
+      lastByUser.set(speaker.owner_user_id, m.text)
+    }
+    const stance = (text: string) => text.trim().toLowerCase().replace(/[\s，。！？、,.!?:：；;「」"'“”]/g, '')
+    const stances = new Map([...lastByUser].map(([id, text]) => [id, stance(text)]))
+    const distinct = new Set(stances.values())
+    const deciderStance = stances.get(deciderId)
+    const watcherIds = distinct.size <= 1
+      ? []
+      : [...stances.keys()].filter((id) => id !== deciderId && (deciderStance === undefined || stances.get(id) !== deciderStance))
+    const deciderName = this.user(deciderId).name
+    const whyTask = task?.owner_id === deciderId
+      ? `交给${deciderName}定夺，因为${deciderName}是任务「${task.title}」的负责人`
+      : `任务没有仍在空间里的负责人，交给空间 owner ${deciderName}定夺`
+    const whyWatch = watcherIds.length
+      ? `${watcherIds.map((id) => this.user(id).name).join('、')}的个人 agent 在讨论里立场不同，他们会看到并可以补充意见`
+      : '讨论里的个人 agent 没有互相冲突的立场'
+    return { deciderId, watcherIds, why: `${whyTask}。${whyWatch}` }
+  }
+
+  private openEscalationJudgments(discussionId: string, audience: { deciderId: string; watcherIds: string[]; why: string }): void {
+    const d = this.discussion(discussionId)
+    const rows: Array<{ userId: string; role: 'decide' | 'watch' }> = [
+      { userId: audience.deciderId, role: 'decide' },
+      ...audience.watcherIds.map((userId) => ({ userId, role: 'watch' as const })),
+    ]
+    for (const row of rows) {
+      const open = this.db.get('SELECT id FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', d.id, row.userId, 'open')
+      if (open) continue
+      this.db.insert('judgments', {
+        id: newId('j'), space_id: d.space_id, user_id: row.userId, kind: 'decide', ref_id: d.id, title: d.title,
+        suggestion: '', suggested_action: row.role === 'watch' ? 'watch' : '', basis: audience.why, role: row.role, created_at: now(),
+      })
+      this.bus.publish(`user:${row.userId}`, { type: 'judgments' })
+      this.jobs.enqueue('decide_suggest', this.personalAgent(row.userId).id, { discussionId: d.id, userId: row.userId, decides: row.role === 'decide' })
+    }
   }
 
   private finishDiscussion(discussionId: string, outcome: string, decidedByName: string, decidedByUserId: string | null, writeback?: string[]): void {
@@ -683,28 +768,39 @@ export class Domain {
 
   suggestDecision(agent: Agent, input: { discussion_id: string; choice: string; basis: string }): void {
     const d = this.discussion(input.discussion_id)
-    const s = this.space(d.space_id)
-    if (agent.kind !== 'personal' || agent.owner_user_id !== s.owner_id) throw new DomainError('只有 owner 的 agent 可以给定夺建议', 403)
+    if (agent.kind !== 'personal' || !agent.owner_user_id) throw new DomainError('只有被问到的个人 agent 可以给定夺建议', 403)
     if (d.status !== 'escalated') throw new DomainError('讨论不在等人定夺的状态')
-    const open = this.db.get("SELECT 1 FROM judgments WHERE kind = 'decide' AND ref_id = ? AND status = 'open'", d.id)
-    if (open) throw new DomainError('已经给过建议了')
-    this.db.insert('judgments', {
-      id: newId('j'), space_id: d.space_id, user_id: s.owner_id, kind: 'decide', ref_id: d.id, title: d.title,
-      suggestion: input.choice.trim(), suggested_action: 'accept', basis: input.basis.trim(), created_at: now(),
-    })
-    this.db.insert('discussion_messages', { id: newId('dm'), discussion_id: d.id, author_kind: 'agent', author_id: agent.id, author_name: agent.name, text: `以 owner 名义建议：${input.choice.trim()}。依据：${input.basis.trim()}`, created_at: now() })
-    this.log(s.owner_id, agent.id, d.space_id, `在讨论「${d.title}」里以 owner 名义给出建议`, input.basis, `/spaces/${d.space_id}/discussions/${d.id}`)
-    this.bus.publish(`user:${s.owner_id}`, { type: 'judgments' })
+    const open = this.db.get<{ id: string; role: string; suggestion: string }>('SELECT id, role, suggestion FROM judgments WHERE kind = ? AND ref_id = ? AND user_id = ? AND status = ?', 'decide', d.id, agent.owner_user_id, 'open')
+    if (!open) throw new DomainError('这件事没有交给你的主人')
+    if (open.suggestion.trim()) throw new DomainError('已经给过建议了')
+    const decides = open.role !== 'watch'
+    const choice = input.choice.trim()
+    const basis = input.basis.trim()
+    this.db.update('judgments', open.id, { suggestion: choice, suggested_action: decides ? 'accept' : 'watch', basis })
+    const line = decides ? `以负责人名义建议：${choice}。依据：${basis}` : `供参考：${choice}。依据：${basis}`
+    this.db.insert('discussion_messages', { id: newId('dm'), discussion_id: d.id, author_kind: 'agent', author_id: agent.id, author_name: agent.name, text: line, created_at: now() })
+    this.log(agent.owner_user_id, agent.id, d.space_id, decides ? `在讨论「${d.title}」里以负责人名义给出建议` : `在讨论「${d.title}」里给出供参考的建议`, basis, `/spaces/${d.space_id}/discussions/${d.id}`)
+    this.bus.publish(`user:${agent.owner_user_id}`, { type: 'judgments' })
     this.touch(d.space_id)
   }
 
-  resolveJudgment(userId: string, judgmentId: string, input: { action: 'pass' | 'reject' | 'accept' | 'override'; reason?: string; choice?: string; saveAsStandard?: boolean; standardScope?: string }): void {
+  resolveJudgment(userId: string, judgmentId: string, input: { action: 'pass' | 'reject' | 'accept' | 'override' | 'comment'; reason?: string; choice?: string; saveAsStandard?: boolean; standardScope?: string }): void {
     const j = this.db.get<{ id: string; space_id: string; user_id: string; kind: string; ref_id: string; title: string; suggestion: string; status: string }>('SELECT * FROM judgments WHERE id = ?', judgmentId)
     if (!j) throw new DomainError('待处理事项不存在', 404)
     if (j.user_id !== userId) throw new DomainError('这件事不归你处理', 403)
     if (j.status !== 'open') throw new DomainError('这件事已经处理过了')
     const me = this.user(userId)
     const reason = input.reason?.trim() ?? ''
+    if (input.action === 'comment') {
+      if (j.kind !== 'decide') throw new DomainError('这里不能补充意见')
+      if (!reason) throw new DomainError('请写下要补充的意见')
+      const d = this.discussion(j.ref_id)
+      if (d.status !== 'escalated') throw new DomainError('讨论已经不在等人定夺的状态')
+      this.db.insert('discussion_messages', { id: newId('dm'), discussion_id: d.id, author_kind: 'user', author_id: userId, author_name: me.name, text: reason.slice(0, 2000), created_at: now() })
+      this.touch(d.space_id)
+      this.bus.publish(`user:${userId}`, { type: 'judgments' })
+      return
+    }
     if (j.kind === 'confirm') {
       if (input.action !== 'pass' && input.action !== 'reject') throw new DomainError('确认只能选择通过或打回')
       if (input.action === 'reject' && !reason) throw new DomainError('打回需要写理由')
@@ -729,15 +825,63 @@ export class Domain {
         this.addStandard(t.space_id, userId, reason, input.standardScope || '全部', `${me.name}${input.action === 'pass' ? '确认' : '打回'}「${t.title}」时写的`, t.id)
       }
     } else {
+      const row = this.db.get<{ role: string }>('SELECT role FROM judgments WHERE id = ?', j.id)
+      if (row?.role === 'watch') throw new DomainError('这件事由任务负责人定夺，你可以补充意见')
       if (input.action !== 'accept' && input.action !== 'override') throw new DomainError('定夺只能选择按建议定或改判')
       const outcome = input.action === 'accept' ? j.suggestion : (input.choice?.trim() ?? '')
       if (!outcome) throw new DomainError('改判需要写清楚你的结论')
       this.db.update('judgments', j.id, { status: 'resolved', resolution: input.action, reason: reason || null, resolved_at: now() })
+      this.db.run("UPDATE judgments SET status = 'resolved', resolution = 'noted', resolved_at = ? WHERE ref_id = ? AND kind = 'decide' AND status = 'open' AND id != ?", now(), j.ref_id, j.id)
       this.finishDiscussion(j.ref_id, outcome, me.name, userId)
       if (input.saveAsStandard && reason) this.addStandard(j.space_id, userId, reason, input.standardScope || '全部', `${me.name}定夺「${j.title}」时写的`, j.ref_id)
     }
     this.bus.publish(`user:${userId}`, { type: 'judgments' })
     this.touch(j.space_id)
+  }
+
+  canRevokeDecision(userId: string, discussionId: string): boolean {
+    const d = this.discussion(discussionId)
+    if (d.status !== 'resolved' || !String(d.outcome ?? '').trim()) return false
+    if (!this.isMember(d.space_id, userId)) return false
+    if (userId === this.space(d.space_id).owner_id) return true
+    if (d.task_id && this.task(d.task_id).owner_id === userId) return true
+    return d.decided_by === userId
+  }
+
+  /** Keep the old conclusion in memory and on the task, but stop treating it as the current one. */
+  revokeDecision(userId: string, discussionId: string, input: { reason: string; disableStandards?: boolean }): { disabledStandards: string[] } {
+    if (!this.canRevokeDecision(userId, discussionId)) throw new DomainError('你不能撤销这个结论', 403)
+    const reason = input.reason.trim()
+    if (!reason) throw new DomainError('撤销需要写原因')
+    const d = this.discussion(discussionId)
+    const outcome = String(d.outcome ?? '').trim()
+    const me = this.user(userId)
+    const disabledStandards: string[] = []
+    const targets = parseJson<string[]>(d.writeback, [])
+    this.db.tx(() => {
+      this.db.update('discussions', d.id, { status: 'escalated', outcome: '', revoked_outcome: outcome, revoke_reason: reason.slice(0, 500), revoked_by: userId, revoked_at: now() })
+      this.db.insert('discussion_messages', { id: newId('dm'), discussion_id: d.id, author_kind: 'user', author_id: userId, author_name: me.name, text: `撤销结论：${reason}。原结论「${outcome}」不再有效。`, created_at: now() })
+      this.remember(d.space_id, 'decision', `撤销结论「${d.title}」：原结论「${outcome}」不再有效。原因：${reason}`, d.id)
+      for (const taskId of targets) {
+        const t = this.db.get<Task>('SELECT * FROM tasks WHERE id = ?', taskId)
+        if (!t || t.space_id !== d.space_id || t.status === 'merged') continue
+        this.event(t.id, 'user', userId, me.name, `撤销讨论「${d.title}」的结论。原结论：${outcome}。原因：${reason}`)
+        this.db.update('tasks', t.id, { status: 'in_progress', blocked_by_discussion: d.id, live: '结论已撤销，等重新定夺', updated_at: now() })
+      }
+      if (input.disableStandards) {
+        const standards = this.db.all<{ id: string; text: string }>('SELECT id, text FROM standards WHERE space_id = ? AND source_ref = ? AND enabled = 1', d.space_id, d.id)
+        for (const st of standards) {
+          this.db.update('standards', st.id, { enabled: 0 })
+          this.remember(d.space_id, 'standard', `停用团队标准「${st.text}」（随结论「${d.title}」一并撤销）`, st.id)
+          disabledStandards.push(st.id)
+        }
+      }
+    })
+    const audience = this.escalationAudience(d)
+    this.db.update('discussions', d.id, { decider_user_id: audience.deciderId, audience: [audience.deciderId, ...audience.watcherIds], escalate_why: audience.why })
+    this.openEscalationJudgments(d.id, audience)
+    this.touch(d.space_id)
+    return { disabledStandards }
   }
 
   judgmentsFor(userId: string): Row[] {
@@ -820,17 +964,24 @@ export class Domain {
   }
 
   /** Shared space context given to every agent turn. */
-  spaceContext(spaceId: string): Record<string, unknown> {
+  spaceContext(spaceId: string, options: { brief?: boolean } = {}): Record<string, unknown> {
     const s = this.space(spaceId)
-    return {
+    const members = this.members(spaceId).filter((m) => m.left_at === null).map((m) => ({
+      user_id: m.id, name: m.name, title: m.title,
+      public_profile: options.brief ? String(m.public_profile || '').slice(0, 160) : String(m.public_profile || ''),
+    }))
+    const context: Record<string, unknown> = {
       space: { id: s.id, name: s.name, owner_user_id: s.owner_id, goal: s.goal_title ? { title: s.goal_title, due: s.goal_due, metrics: parseJson(s.goal_metrics, []) } : null },
-      members: this.members(spaceId).filter((m) => m.left_at === null).map((m) => ({ user_id: m.id, name: m.name, title: m.title, public_profile: m.public_profile || '' })),
+      members,
       specialists: this.spaceAgents(spaceId).filter((a) => a.kind === 'specialist').map((a) => ({ agent_id: a.id, name: a.name, specialty: a.specialty })),
       standards: this.standards(spaceId, true).map((st) => ({ id: st.id, text: st.text, scope: st.scope })),
-      recent_memory: this.db.all<{ text: string; created_at: number }>('SELECT text, created_at FROM memory WHERE space_id = ? ORDER BY created_at DESC LIMIT 20', spaceId).map((m) => ({ text: m.text, date: new Date(m.created_at).toISOString().slice(0, 10) })),
-      files: this.db.all('SELECT id, name, source FROM files WHERE space_id = ? ORDER BY created_at DESC', spaceId),
-      skills: this.db.all('SELECT id, name, description FROM skills WHERE space_id = ? ORDER BY uses DESC', spaceId),
+      recent_memory: this.db.all<{ text: string; created_at: number }>(`SELECT text, created_at FROM memory WHERE space_id = ? ORDER BY created_at DESC LIMIT ${options.brief ? 6 : 20}`, spaceId).map((m) => ({ text: m.text, date: new Date(m.created_at).toISOString().slice(0, 10) })),
     }
+    if (!options.brief) {
+      context.files = this.db.all('SELECT id, name, source FROM files WHERE space_id = ? ORDER BY created_at DESC', spaceId)
+      context.skills = this.db.all('SELECT id, name, description FROM skills WHERE space_id = ? ORDER BY uses DESC', spaceId)
+    }
+    return context
   }
 
   taskView(taskId: string): Record<string, unknown> {
@@ -847,6 +998,9 @@ export class Domain {
     const d = this.discussion(discussionId)
     return {
       id: d.id, title: d.title, question: d.question, status: d.status, task_id: d.task_id, summary: d.summary, options: parseJson(d.options as string, []),
+      outcome: d.status === 'resolved' ? d.outcome : '',
+      revoked_outcome: d.revoked_outcome || '',
+      escalate_why: d.escalate_why || '',
       participants: this.db.all('SELECT a.id AS agent_id, a.name, a.kind FROM discussion_participants p JOIN agents a ON a.id = p.agent_id WHERE p.discussion_id = ?', d.id),
       messages: this.db.all<{ author_name: string; text: string }>('SELECT author_name, text FROM discussion_messages WHERE discussion_id = ? ORDER BY created_at', d.id).map((m) => `${m.author_name}：${m.text}`),
     }

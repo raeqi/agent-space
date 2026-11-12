@@ -23,6 +23,7 @@ export function JudgmentActions({ j, onDone }: { j: any; onDone?: () => void }) 
   }
 
   const confirm = j.kind === 'confirm'
+  const watch = j.role === 'watch' || j.suggested_action === 'watch'
   const suggestedReject = j.suggested_action === 'reject'
 
   if (mode === 'reject') {
@@ -55,6 +56,11 @@ export function JudgmentActions({ j, onDone }: { j: any; onDone?: () => void }) 
           <>
             <button className={`btn${suggestedReject ? '' : ' primary'}`} disabled={busy} onClick={() => void send({ action: 'pass' })}>通过</button>
             <button className={`btn${suggestedReject ? ' primary' : ''}`} disabled={busy} onClick={() => { setReason(suggestedReject ? j.suggestion.replace(/^打回：/, '') : ''); setMode('reject') }}>打回</button>
+          </>
+        ) : watch ? (
+          <>
+            <input className="input" placeholder="补充你的意见" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <button className="btn" disabled={busy || !reason.trim()} onClick={() => void send({ action: 'comment', reason })}>补充意见</button>
           </>
         ) : (
           <>

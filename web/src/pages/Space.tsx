@@ -2,7 +2,7 @@ import { CompactText } from '../ui.tsx'
 import { useState } from 'react'
 import { Link, Outlet, useLocation, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { api, spaceStream, useApi } from '../api.ts'
-import { Avatar, Live, Nav, SpaceHeader, Tag, useMe, when } from '../ui.tsx'
+import { Avatar, DemoBanner, Live, Nav, SpaceHeader, Tag, useMe, when } from '../ui.tsx'
 
 export interface SpaceCtx { data: any; reload: () => void; spaceId: string }
 export const useSpace = () => useOutletContext<SpaceCtx>()
@@ -16,6 +16,7 @@ export function SpaceLayout() {
     <div className="app">
       <Nav />
       <main className="main">
+        <DemoBanner />
         {error && <div className="page"><p className="error">{error}</p></div>}
         {data && <><SpaceHeader space={data.space} tab={tab} members={data.members} /><Outlet context={{ data, reload, spaceId } satisfies SpaceCtx} /></>}
       </main>

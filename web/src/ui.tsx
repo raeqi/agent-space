@@ -16,6 +16,16 @@ export function Avatar({ name, id, size = 22, agent = false }: { name: string; i
   return <span className={`av${agent ? ' agent' : ''}`} style={{ width: size, height: size, background: colorFor(person), fontSize: Math.max(10, size / 2 - 1) }} aria-hidden>{(person || '?').slice(0, 1)}</span>
 }
 
+export function DemoBanner() {
+  const { data } = useApi<{ demoMode?: boolean }>('/api/config')
+  if (!data?.demoMode) return null
+  return (
+    <div className="demo-banner" role="status">
+      <b>演示模式。</b>回复由脚本生成，用来把协作流程走通。要体验真实的 agent 能力，在项目根目录的 <code>.env</code> 填写 <code>MODEL_API_KEY</code>、<code>MODEL_BASE_URL</code>、<code>MODEL_NAME</code> 后重启。
+    </div>
+  )
+}
+
 export function Tag({ children, tone }: { children: ReactNode; tone?: 'amber' | 'green' | 'indigo' }) {
   return <span className={`tag${tone ? ` ${tone}` : ''}`}>{children}</span>
 }

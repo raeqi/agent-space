@@ -215,6 +215,14 @@ export class Db {
     // JSON { expected, seen, endsAt, scheduleId } while a task waits for its scheduled runs before delivery.
     this.ensureColumn('tasks', 'schedule_wait', 'TEXT')
     this.ensureColumn('tasks', 'schedule_result', 'TEXT')
+    this.ensureColumn('discussions', 'decider_user_id', 'TEXT')
+    this.ensureColumn('discussions', 'audience', "TEXT NOT NULL DEFAULT '[]'")
+    this.ensureColumn('discussions', 'escalate_why', "TEXT NOT NULL DEFAULT ''")
+    this.ensureColumn('discussions', 'revoked_outcome', "TEXT NOT NULL DEFAULT ''")
+    this.ensureColumn('discussions', 'revoke_reason', "TEXT NOT NULL DEFAULT ''")
+    this.ensureColumn('discussions', 'revoked_by', 'TEXT')
+    this.ensureColumn('discussions', 'revoked_at', 'INTEGER')
+    this.ensureColumn('judgments', 'role', "TEXT NOT NULL DEFAULT 'decide'")
   }
 
   /** Additive migration for databases created by earlier versions. */

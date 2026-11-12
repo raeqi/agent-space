@@ -1,5 +1,9 @@
 # Agent 空间 · 让团队的 Agent 一起把事情做完
 
+Agent 空间是个人桌面 agent 的团队形态。每个人身边已经有一个个人 agent：它观察工作，记住偏好和标准，能替主人先做一步。拾遗是这种个人 agent 的一种样子。这个产品要看的是下一步：这些已经了解主人的个人 agent 走进同一个空间，代表各自的主人，和空间助理、专项 agent 一起把事情做完；只有需要人拍板的时候，事情才来到人面前。
+
+这个演示假定那段了解已经发生。页面里的公开档案和判断手册，写下的是桌面 agent 日积月累会学到的工作方式、标准和过往决定。学习过程本身不在这次演示里。
+
 > 你把一件事交进空间，空间助理整理需求、安排执行；
 > 遇到分歧，相关成员的个人 Agent 带着各自的标准参与讨论，需要拍板时再来找人；
 > 结果留下，确认和打回的理由也能成为团队下一次做事的标准。
@@ -11,6 +15,40 @@
 - 空间助理负责整理与协调，通用及专项 Agent 负责实际执行。
 
 先读[产品初衷与方向](docs/product-intent.md)，了解我们看到的问题与未来判断；角色分工、产品形态和使用流程见 **[完整产品说明](docs/product-overview.md)**。
+
+## 先跑起来
+
+两条路，看你想体验到哪一步。
+
+| | 不填 API key | 填写 API key |
+|---|---|---|
+| 你会看到 | **演示模式**。回复由脚本生成，协作流程是真的：整理、执行、讨论、预审、通过或打回、沉淀团队标准 | **真实模型**。agent 会按你填的服务阅读、调用工具、自己判断 |
+| 怎么做 | 下面三条命令，不用准备 `.env` | 在项目根目录的 `.env` 填写 `MODEL_API_KEY`、`MODEL_BASE_URL`、`MODEL_NAME`，然后同样启动 |
+
+不填 key，直接跑：
+
+```sh
+npm install
+npm run build
+npm start
+```
+
+打开 http://localhost:8787 ，点「以林夏的身份看演示」，或用 `lin@demo.local` 登录、名字填林夏。空库会带上一份进行中的「新支付上线」。
+
+要换成真实模型，把下面三项写进 `.env` 后重启。key 放在这个文件里，不要写进源码或提交到仓库。模型名以服务商控制台为准：
+
+| 服务 | `MODEL_BASE_URL` | `MODEL_NAME` 示例 |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4.1` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-pro` |
+| Kimi / Moonshot（国内） | `https://api.moonshot.cn/v1` | `kimi-k2` |
+| Kimi / Moonshot（国际） | `https://api.moonshot.ai/v1` | `kimi-k2` |
+| 通义千问 / DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.5-air` |
+
+DeepSeek 用 `deepseek-v4-pro` 写长文档，短回复另填 `MODEL_LIGHT_NAME=deepseek-flash`（更快、更便宜）。`deepseek-chat` 是旧别名，请求会落到 flash。想在大约两分钟内走完真实模型的整条流程，再设 `LIGHT_MODE=1`：不跑个人 agent 预审，负责人仍可以直接通过或打回；每个任务最多一次讨论；产物限在约两千字。执行本身不设很小的输出上限，避免推理模型把额度用在思考上、来不及提交。一次真实执行里，长文档占了大部分时间和费用；执行 agent 现在直接提交产物，不再先写进本地文件再贴一遍。
+
+`COOKIE_SECRET` 在演示模式可以不填，程序会在数据目录生成一把并记住。接上真实模型、给别人用时再改成你自己的随机字符串。
 
 ---
 
@@ -32,8 +70,9 @@
 执行 Agent：读资料、使用工具、完成工作
         │
         ├─ 需要取舍 → 发起讨论 → 相关个人 Agent 陈述立场
-        │                         → 空间助理汇总，超出权限交给 owner
-        │                         → owner 的 Agent 给建议，本人定夺
+        │                         → 空间助理汇总，超出权限交给任务负责人定夺
+        │                         → 负责人的 Agent 给建议，本人定夺；立场不同的成员会看到
+        │                         → 结论可以撤销，原结论留在记录里，不再当作当前结论
         │                         → 结论写回，继续执行
         │
 提交产物与自检 → 负责人的个人 Agent 预审 → 本人通过或打回
@@ -47,7 +86,7 @@
 - **责任与执行分开**：任务有负责的人，也有实际执行的 Agent。个人 Agent 不需要具备所有专业能力。
 - **共享事实，保留个人边界**：空间保存公共资料、结果和标准；个人 Agent 的公开档案用于协作，判断手册用于为主人提供建议。
 - **交付可以打回**：反馈会带回执行过程；有普遍价值的理由可以由人保存为团队标准，后续 Agent 据此工作。
-- **分歧有出口**：讨论结论写回任务，需要负责人取舍时升级处理，避免只留下讨论记录。
+- **分歧有出口**：讨论结论写回任务。需要人取舍时，交给任务负责人定夺，立场不同的成员也会看到。结论可以撤销，原话留在记录里，避免只留下讨论记录。
 - **简单执行不必重复审批**：有限次数的定时任务，在执行记录数量符合预期且交付自检全部通过时自动完成；记录异常或检查失败则保留人工确认。这仍不等同于独立验证执行效果。
 - **人走，空间的积累留下**：支持责任交接，共享资料、决策和团队标准继续留存。
 
@@ -66,7 +105,7 @@
 
 这是一个可运行的产品原型，完整产品说明包含尚未实现的目标能力。
 
-- 个人 Agent 对主人的理解，目前主要来自显式配置的公开档案和判断手册，尚未形成持续学习。
+- 个人 agent 能代表主人，是因为它在进空间之前已经了解这个人。演示用公开档案和判断手册写下这些理解，代替桌面 agent 本来会学到的记忆；学习过程不在这次演示里。
 - 主动信息同步、求助路由、跨空间协调仍待完善。
 - 目前任务执行和交付流程最完整，任务之外的持续协作还需要补齐。
 - 从既有协作工具导入成员和资料、接入桌面端个人 Agent 尚未实现。
@@ -74,17 +113,26 @@
 
 ## 模型与 API key 配置
 
+不填 key 就会进入上面的演示模式。下面只在你要接真实模型时需要。
+
 当前版本由部署者在服务端配置模型密钥，页面尚不支持每位用户分别填写自己的 key。运行这个实例产生的模型调用费用，由服务端配置的密钥所属账户承担。
 
-首次本地运行：
+密钥放在项目根目录的 `.env`，不绑定某一家服务商。对方只要提供 OpenAI 兼容的 Chat Completions 接口，就填写 key、base URL 和模型名。`.env` 已被 Git 忽略。真实 key 只留在这一个文件里，不要写进源码、截图、共享文档或提交到仓库。
 
 1. 将 `.env.example` 复制为 `.env`。
-2. 在 `.env` 的 `DEEPSEEK_API_KEY=` 后填入你自己申请的 API key，并设置 `COOKIE_SECRET`。
-3. 重新启动服务。若提示缺少 key，检查 `.env` 是否在项目根目录、值是否为空。
+2. 在 `MODEL_API_KEY=` 后面填入你自己申请的 API key。
+3. 填写 `MODEL_BASE_URL` 和 `MODEL_NAME`。base URL 停在版本前缀，一般以 `/v1` 结尾。常见组合见上面的表。
+4. 给别人用时设置 `COOKIE_SECRET`，然后重启。换 key 或换模型后也要重启。
 
-`.env` 已被 Git 忽略。不要把真实 key 写进源码、截图、共享文档或提交到仓库。换 key 后也需要重启服务。
+只填了 key、却没填地址或模型名时，启动会指出缺哪一项。`DEMO_MODE=1` 可以在已经填了 key 时仍强制走演示模式。
 
-Kimi 配置入口尚未接通，当前启动检查仍要求默认服务的 key；不要仅把 Kimi key 填入 `DEEPSEEK_API_KEY`，两者不能互换。后续提供模型选择、密钥输入和连接测试后，再补充相应操作步骤。
+自定义 base URL 会按 OpenAI 兼容接口连接，一般只填上面三个变量。`MODEL_PROVIDER` 可以不写；只有在使用 harness 自带的供应商目录、并且不填 `MODEL_BASE_URL` 时才需要它，例如 `openai`、`moonshotai`、`anthropic`。
+
+### 从旧变量迁移
+
+只配置了 `DEEPSEEK_API_KEY` 的旧 `.env` 可以继续用，服务仍走 DeepSeek 官方接口，模型默认 `deepseek-flash`。这时 `MODEL_BASE_URL` 的含义和以前一样：它覆盖 DeepSeek 的 Anthropic Messages 地址（测试里的脚本化模型也走这条路径）。
+
+建议改成 `MODEL_API_KEY`、`MODEL_BASE_URL`、`MODEL_NAME` 后重启。一旦设置了 `MODEL_API_KEY` 或 `MODEL_NAME`，同一个 `MODEL_BASE_URL` 就按 OpenAI Chat Completions 调用；DeepSeek 请用 `https://api.deepseek.com` 和 `deepseek-v4-pro`（`deepseek-flash` 更快、更便宜）。`DSH_MODEL` 在 `MODEL_NAME` 未设置时仍作为模型名。`DSH_PROVIDER` 只在没有这些新变量时生效。启动时如果仍在读旧变量，会打一行提示。
 
 ## 本地运行与开发
 
@@ -93,19 +141,18 @@ Kimi 配置入口尚未接通，当前启动检查仍要求默认服务的 key�
 
 ## 运行
 
-需要 Node.js 24.9 或更高版本。每位部署者必须配置自己的模型 API key，项目不附带个人密钥。
+需要 Node.js 24.9 或更高版本。不填模型 API key 就是演示模式；要接真实模型时，每位部署者使用自己的 key，项目不附带个人密钥。
 
 ```sh
-cp .env.example .env    # 填入 DEEPSEEK_API_KEY 和 COOKIE_SECRET
 npm install
 npm run build
-npm start               # http://localhost:8787
+npm start               # http://localhost:8787 ，不填 key 就是演示模式
 ```
 
 用 Docker：
 
 ```sh
-DEEPSEEK_API_KEY=sk-... COOKIE_SECRET=$(openssl rand -hex 32) docker compose up -d
+MODEL_API_KEY=sk-... MODEL_BASE_URL=https://api.openai.com/v1 MODEL_NAME=gpt-4.1 COOKIE_SECRET=$(openssl rand -hex 32) docker compose up -d
 ```
 
 想先看看效果，可以先写入演示数据：四个空间、六个人，任务、讨论、待处理、标准、记忆、Skills 和资料都处在不同状态。数据只会写进空库：
@@ -124,12 +171,18 @@ DATA_DIR=./data-demo npm start
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | — | 必填 |
-| `COOKIE_SECRET` | 开发用默认值 | 生产环境必须修改 |
+| `MODEL_API_KEY` | 空 | 留空进入演示模式。要真实模型时，和下面两项一起填 |
+| `MODEL_BASE_URL` | 空 | OpenAI 兼容接口地址 |
+| `MODEL_NAME` | 空 | 长文档用的模型名。DeepSeek 用 `deepseek-v4-pro` |
+| `MODEL_LIGHT_NAME` | 与 `MODEL_NAME` 相同 | 整理、讨论、预审等短回复。DeepSeek 用 `deepseek-flash` |
+| `LIGHT_MODE` | 关 | 设为 `1` 时不跑预审（人直接确认）、每个任务最多一次讨论、产物更短。不限制执行的输出 token |
+| `MODEL_PROVIDER` | 空 | 一般留空。不填 base URL 时，用来选择 harness 内置供应商 |
+| `DEMO_MODE` | 空 | 设为 `1` 时，即使填了 key 也用脚本回复 |
+| `COOKIE_SECRET` | 演示模式自动生成 | 生产环境必须修改 |
 | `ACCESS_CODE` | 空 | 登录访问码 |
-| `DSH_MODEL` | `deepseek-flash` | 所有 agent 用的模型 |
-| `DSH_PROVIDER` | `deepseek-official` | 模型服务路由 |
-| `MODEL_BASE_URL` | 空 | 覆盖 DeepSeek API 地址（测试时指向脚本化模型） |
+| `DEEPSEEK_API_KEY` | — | 旧变量。只设置它时仍走 DeepSeek 官方接口 |
+| `DSH_MODEL` | 旧部署为 `deepseek-flash` | 旧变量。`MODEL_NAME` 未设置时作为模型名 |
+| `DSH_PROVIDER` | 旧部署为 `deepseek-official` | 旧变量。没有新的 `MODEL_API_KEY` / `MODEL_NAME` / `MODEL_PROVIDER` 时才生效 |
 | `PORT` / `HOST` | `8787` / `0.0.0.0` | |
 | `INTERNAL_URL` | `http://127.0.0.1:$PORT` | agent 访问本服务 MCP 端点用的地址 |
 | `DATA_DIR` | `./data` | 数据库和运行目录 |
