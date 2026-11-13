@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Agent 空间：人、个人 agent、空间助理和专项 agent 在同一个空间里把事做完。基于 DeepSeek Harness (dsh)。",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "engines": {
     "node": ">=24.9.0"
