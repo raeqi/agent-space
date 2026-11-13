@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api, useApi } from '../api.ts'
 
 export function Login({ onDone }: { onDone: () => void }) {
+  const navigate = useNavigate()
   const { data: cfg } = useApi<{ accessCodeRequired: boolean; demoMode?: boolean }>('/api/config')
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
@@ -24,7 +26,12 @@ export function Login({ onDone }: { onDone: () => void }) {
     setBusy(true)
     setError('')
     try {
-      await api('POST', '/api/login', { email: 'lin@demo.local', name: '林夏' })
+      await api('POST', '/api/login', { email: 'lin@demo.local', name: '林夏', accessCode: code })
+      // Seeded space IDs differ between databases; resolve the accessible showcase
+      // instead of hard-coding a local demo URL. A missing space must not block login.
+      const data = await api<{ spaces: Array<{ id: string; name: string }> }>('GET', '/api/spaces').catch(() => null)
+      const showcase = data?.spaces.find((space) => space.name === '新支付上线')
+      navigate(showcase ? `/spaces/${showcase.id}` : '/', { replace: true })
       onDone()
     } catch (err) {
       setError((err as Error).message)
